@@ -2,6 +2,9 @@ import os
 import hashlib
 from openai import OpenAI
 import fitz  # PyMuPDF
+import pytesseract
+from pdf2image import convert_from_path
+from PIL import Image
 import tiktoken
 from db import collection
 
@@ -78,6 +81,32 @@ def get_embedding(text: str) -> list[float]:
     ).data[0].embedding
 
 
+def ocr_pdf(filepath: str, file_id: str, department: str, category: str, filename: str) -> list:
+    """Convert PDF pages to images and run OCR."""
+    print(f"    [OCR] Triggered fallback for {file_id}. This may take a moment...")
+    try:
+        # Convert PDF to images (lowering DPI to 200 for speed, usually enough for OCR)
+        images = convert_from_path(filepath, dpi=200)
+        all_chunks = []
+        for i, image in enumerate(images, 1):
+            # Run OCR with Vietnamese and English support
+            text = pytesseract.image_to_string(image, lang='vie+eng').strip()
+            if len(text) < 10: continue
+            
+            # Since OCR loses page-level structure often, we treat each page as a single chunk 
+            # or run structural chunking if text is long.
+            chunks = structural_chunk(text, file_id, i, department, category, filename)
+            if not chunks and len(text) >= 10:
+                chunks = [_make_chunk(text, file_id, i, 0, department, category, filename)]
+            all_chunks.extend(chunks)
+        
+        print(f"    [OCR] Completed: {len(all_chunks)} chunks found.")
+        return all_chunks
+    except Exception as e:
+        print(f"    [OCR] ERROR: {e}")
+        return []
+
+
 def detect_department_category(filepath: str) -> tuple[str, str]:
     parts = filepath.replace("\\", "/").split("/")
     try:
@@ -146,8 +175,13 @@ def ingest_pdf(filepath: str, department: str = None, category: str = None) -> i
     if not all_chunks:
         print(f"  WARNING: No chunks generated for {file_id} (Total chars: {total_chars})")
         if total_chars == 0:
-            print(f"  DEBUG: Try opening this PDF and copying text manually. If that works, the PDF might have a non-standard encoding.")
-        return 0
+            # Automatic OCR fallback
+            all_chunks = ocr_pdf(filepath, file_id, department, category, filename)
+            if not all_chunks:
+                print(f"  HINT: OCR also failed. This file might be empty or corrupted.")
+                return 0
+        else:
+            return 0
 
     print(f"    - Generated {len(all_chunks)} chunks. Starting upsert to ChromaDB...")
 
