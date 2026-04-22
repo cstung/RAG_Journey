@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chatbot Nội bộ</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=Space+Mono&display=swap');
+
+    :root {
+      --yellow: #FFE500;
+      --black: #0D0D0D;
+      --white: #FAFAFA;
+      --gray: #F0F0F0;
+      --border: 2px solid #0D0D0D;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Space Grotesk', sans-serif;
+      background: var(--gray);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--yellow);
+      border-bottom: var(--border);
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+
+    header h1 {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+
+    #stats-badge {
+      font-family: 'Space Mono', monospace;
+      font-size: 11px;
+      background: var(--black);
+      color: var(--yellow);
+      padding: 4px 10px;
+      border-radius: 100px;
+    }
+
+    /* ── Upload bar ── */
+    #upload-bar {
+      background: var(--white);
+      border-bottom: var(--border);
+      padding: 10px 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+
+    #upload-bar label {
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    #file-input { display: none; }
+
+    .btn {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 13px;
+      font-weight: 700;
+      padding: 7px 16px;
+      border: var(--border);
+      background: var(--yellow);
+      cursor: pointer;
+      border-radius: 4px;
+      transition: transform 0.1s, box-shadow 0.1s;
+      box-shadow: 2px 2px 0 var(--black);
+    }
+
+    .btn:hover { transform: translate(-1px, -1px); box-shadow: 3px 3px 0 var(--black); }
+    .btn:active { transform: translate(1px, 1px); box-shadow: 1px 1px 0 var(--black); }
+    .btn.secondary { background: var(--white); }
+
+    #upload-status {
+      font-size: 12px;
+      color: #555;
+      font-family: 'Space Mono', monospace;
+    }
+
+    /* ── Chat area ── */
+    #chat-container {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .message {
+      display: flex;
+      flex-direction: column;
+      max-width: 75%;
+    }
+
+    .message.user { align-self: flex-end; align-items: flex-end; }
+    .message.bot  { align-self: flex-start; align-items: flex-start; }
+
+    .bubble {
+      padding: 12px 16px;
+      border: var(--border);
+      border-radius: 8px;
+      font-size: 14px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .message.user .bubble {
+      background: var(--yellow);
+      box-shadow: 3px 3px 0 var(--black);
+    }
+
+    .message.bot .bubble {
+      background: var(--white);
+      box-shadow: 3px 3px 0 var(--black);
+    }
+
+    .sources {
+      margin-top: 6px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+
+    .source-tag {
+      font-family: 'Space Mono', monospace;
+      font-size: 10px;
+      padding: 2px 8px;
+      background: var(--gray);
+      border: 1px solid #ccc;
+      border-radius: 100px;
+      color: #555;
+    }
+
+    .typing {
+      display: flex;
+      gap: 4px;
+      align-items: center;
+      padding: 14px 18px;
+    }
+
+    .typing span {
+      width: 7px; height: 7px;
+      background: #aaa;
+      border-radius: 50%;
+      animation: bounce 1.2s infinite;
+    }
+    .typing span:nth-child(2) { animation-delay: 0.2s; }
+    .typing span:nth-child(3) { animation-delay: 0.4s; }
+
+    @keyframes bounce {
+      0%, 80%, 100% { transform: translateY(0); }
+      40% { transform: translateY(-6px); }
+    }
+
+    /* ── Input bar ── */
+    #input-bar {
+      background: var(--white);
+      border-top: var(--border);
+      padding: 14px 20px;
+      display: flex;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+
+    #question-input {
+      flex: 1;
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 14px;
+      padding: 10px 14px;
+      border: var(--border);
+      border-radius: 6px;
+      outline: none;
+      resize: none;
+      height: 44px;
+    }
+
+    #question-input:focus { box-shadow: 3px 3px 0 var(--black); }
+
+    #send-btn {
+      background: var(--black);
+      color: var(--yellow);
+      font-size: 20px;
+      padding: 0 18px;
+      height: 44px;
+      border: var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      box-shadow: 3px 3px 0 #555;
+    }
+
+    #send-btn:hover { box-shadow: 4px 4px 0 #555; transform: translate(-1px,-1px); }
+
+    /* ── Welcome message ── */
+    #welcome {
+      text-align: center;
+      color: #999;
+      margin-top: 40px;
+      font-size: 14px;
+      line-height: 2;
+    }
+
+    #welcome .icon { font-size: 40px; display: block; margin-bottom: 8px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>🏢 Chatbot Nội bộ</h1>
+  <span id="stats-badge">Đang tải...</span>
+</header>
+
+<div id="upload-bar">
+  <label>📎 Upload PDF:</label>
+  <input type="file" id="file-input" accept=".pdf" multiple />
+  <button class="btn" onclick="document.getElementById('file-input').click()">Chọn file</button>
+  <button class="btn secondary" onclick="ingestAll()">🔄 Index lại tất cả</button>
+  <span id="upload-status"></span>
+</div>
+
+<div id="chat-container">
+  <div id="welcome">
+    <span class="icon">💬</span>
+    Xin chào! Tôi là trợ lý nội bộ.<br>
+    Hãy đặt câu hỏi về quy định, quy trình hoặc chính sách của công ty.
+  </div>
+</div>
+
+<div id="input-bar">
+  <textarea id="question-input" placeholder="Nhập câu hỏi... (Enter để gửi, Shift+Enter xuống dòng)"></textarea>
+  <button id="send-btn" onclick="sendQuestion()">➤</button>
+</div>
+
+<script>
+  const API = '';  // Same origin
+
+  // ── Load stats ───────────────────────────────────────────────────────────
+  async function loadStats() {
+    try {
+      const res = await fetch(`${API}/api/stats`);
+      const data = await res.json();
+      document.getElementById('stats-badge').textContent =
+        `${data.total_files} file · ${data.total_chunks} chunks`;
+    } catch {
+      document.getElementById('stats-badge').textContent = 'Offline';
+    }
+  }
+
+  // ── Upload ───────────────────────────────────────────────────────────────
+  document.getElementById('file-input').addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files);
+    if (!files.length) return;
+    const status = document.getElementById('upload-status');
+
+    for (const file of files) {
+      status.textContent = `⏳ Đang upload ${file.name}...`;
+      const formData = new FormData();
+      formData.append('file', file);
+      try {
+        const res = await fetch(`${API}/api/upload`, { method: 'POST', body: formData });
+        const data = await res.json();
+        status.textContent = `✅ ${data.message}`;
+      } catch (err) {
+        status.textContent = `❌ Lỗi upload: ${err.message}`;
+      }
+    }
+    e.target.value = '';
+    loadStats();
+  });
+
+  async function ingestAll() {
+    const status = document.getElementById('upload-status');
+    status.textContent = '⏳ Đang index lại toàn bộ...';
+    try {
+      const res = await fetch(`${API}/api/ingest-all`, { method: 'POST' });
+      const data = await res.json();
+      status.textContent = `✅ ${data.message}`;
+      loadStats();
+    } catch (err) {
+      status.textContent = `❌ Lỗi: ${err.message}`;
+    }
+  }
+
+  // ── Chat ─────────────────────────────────────────────────────────────────
+  const chatContainer = document.getElementById('chat-container');
+  const input = document.getElementById('question-input');
+
+  function removeWelcome() {
+    const w = document.getElementById('welcome');
+    if (w) w.remove();
+  }
+
+  function addMessage(role, text, sources = []) {
+    removeWelcome();
+    const div = document.createElement('div');
+    div.className = `message ${role}`;
+
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    bubble.textContent = text;
+    div.appendChild(bubble);
+
+    if (sources.length) {
+      const src = document.createElement('div');
+      src.className = 'sources';
+      sources.forEach(s => {
+        const tag = document.createElement('span');
+        tag.className = 'source-tag';
+        tag.textContent = '📄 ' + s;
+        src.appendChild(tag);
+      });
+      div.appendChild(src);
+    }
+
+    chatContainer.appendChild(div);
+    chatContainer.scrollTop = chatContainer.scrollHeight;
+    return div;
+  }
+
+  function addTyping() {
+    removeWelcome();
+    const div = document.createElement('div');
+    div.className = 'message bot';
+    div.id = 'typing-indicator';
+    div.innerHTML = `<div class="bubble typing"><span></span><span></span><span></span></div>`;
+    chatContainer.appendChild(div);
+    chatContainer.scrollTop = chatContainer.scrollHeight;
+  }
+
+  function removeTyping() {
+    const t = document.getElementById('typing-indicator');
+    if (t) t.remove();
+  }
+
+  async function sendQuestion() {
+    const q = input.value.trim();
+    if (!q) return;
+
+    input.value = '';
+    input.style.height = '44px';
+    addMessage('user', q);
+    addTyping();
+
+    try {
+      const res = await fetch(`${API}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: q })
+      });
+      const data = await res.json();
+      removeTyping();
+      addMessage('bot', data.answer, data.sources || []);
+    } catch (err) {
+      removeTyping();
+      addMessage('bot', `❌ Lỗi kết nối: ${err.message}`);
+    }
+  }
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendQuestion();
+    }
+  });
+
+  // ── Init ──────────────────────────────────────────────────────────────────
+  loadStats();
+  setInterval(loadStats, 30000);
+</script>
+</body>
+</html>

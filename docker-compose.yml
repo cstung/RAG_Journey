@@ -1,0 +1,20 @@
+services:
+  chatbot:
+    build: ./backend
+    container_name: internal-chatbot
+    restart: unless-stopped
+    ports:
+      - "8300:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - COMPANY_NAME=${COMPANY_NAME:-Công ty}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
+      - TOP_K=${TOP_K:-5}
+    volumes:
+      - ./data/docs:/data/docs        # Thả PDF vào đây
+      - ./data/chroma:/data/chroma    # Vector DB tự lưu
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
