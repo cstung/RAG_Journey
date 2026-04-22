@@ -9,9 +9,10 @@
 
     :root {
       --yellow: #FFE500;
-      --black: #0D0D0D;
-      --white: #FAFAFA;
-      --gray: #F0F0F0;
+      --black:  #0D0D0D;
+      --white:  #FAFAFA;
+      --gray:   #F0F0F0;
+      --green:  #00C853;
       --border: 2px solid #0D0D0D;
     }
 
@@ -34,14 +35,9 @@
       align-items: center;
       justify-content: space-between;
       flex-shrink: 0;
+      gap: 12px;
     }
-
-    header h1 {
-      font-size: 18px;
-      font-weight: 700;
-      letter-spacing: -0.5px;
-    }
-
+    header h1 { font-size: 17px; font-weight: 700; white-space: nowrap; }
     #stats-badge {
       font-family: 'Space Mono', monospace;
       font-size: 11px;
@@ -49,48 +45,72 @@
       color: var(--yellow);
       padding: 4px 10px;
       border-radius: 100px;
+      white-space: nowrap;
     }
 
-    /* ── Upload bar ── */
-    #upload-bar {
+    /* ── Toolbar ── */
+    #toolbar {
       background: var(--white);
       border-bottom: var(--border);
       padding: 10px 20px;
       display: flex;
       align-items: center;
       gap: 10px;
+      flex-wrap: wrap;
       flex-shrink: 0;
     }
 
-    #upload-bar label {
-      font-size: 13px;
-      font-weight: 600;
-    }
-
-    #file-input { display: none; }
+    .toolbar-label { font-size: 13px; font-weight: 600; white-space: nowrap; }
 
     .btn {
       font-family: 'Space Grotesk', sans-serif;
       font-size: 13px;
       font-weight: 700;
-      padding: 7px 16px;
+      padding: 7px 14px;
       border: var(--border);
       background: var(--yellow);
       cursor: pointer;
       border-radius: 4px;
-      transition: transform 0.1s, box-shadow 0.1s;
+      box-shadow: 2px 2px 0 var(--black);
+      transition: transform .1s, box-shadow .1s;
+      white-space: nowrap;
+    }
+    .btn:hover  { transform: translate(-1px,-1px); box-shadow: 3px 3px 0 var(--black); }
+    .btn:active { transform: translate(1px,1px);   box-shadow: 1px 1px 0 var(--black); }
+    .btn.secondary { background: var(--white); }
+
+    select {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 7px 10px;
+      border: var(--border);
+      border-radius: 4px;
+      background: var(--white);
+      cursor: pointer;
       box-shadow: 2px 2px 0 var(--black);
     }
 
-    .btn:hover { transform: translate(-1px, -1px); box-shadow: 3px 3px 0 var(--black); }
-    .btn:active { transform: translate(1px, 1px); box-shadow: 1px 1px 0 var(--black); }
-    .btn.secondary { background: var(--white); }
-
-    #upload-status {
-      font-size: 12px;
-      color: #555;
-      font-family: 'Space Mono', monospace;
+    #dept-upload {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 7px 10px;
+      border: var(--border);
+      border-radius: 4px;
+      background: var(--white);
+      cursor: pointer;
+      box-shadow: 2px 2px 0 var(--black);
     }
+
+    #status-msg {
+      font-family: 'Space Mono', monospace;
+      font-size: 11px;
+      color: #555;
+      flex: 1;
+    }
+
+    #file-input { display: none; }
 
     /* ── Chat area ── */
     #chat-container {
@@ -105,9 +125,8 @@
     .message {
       display: flex;
       flex-direction: column;
-      max-width: 75%;
+      max-width: 78%;
     }
-
     .message.user { align-self: flex-end; align-items: flex-end; }
     .message.bot  { align-self: flex-start; align-items: flex-start; }
 
@@ -116,28 +135,25 @@
       border: var(--border);
       border-radius: 8px;
       font-size: 14px;
-      line-height: 1.6;
+      line-height: 1.65;
       white-space: pre-wrap;
       word-break: break-word;
     }
+    .message.user .bubble { background: var(--yellow); box-shadow: 3px 3px 0 var(--black); }
+    .message.bot  .bubble { background: var(--white);  box-shadow: 3px 3px 0 var(--black); }
 
-    .message.user .bubble {
-      background: var(--yellow);
-      box-shadow: 3px 3px 0 var(--black);
-    }
-
-    .message.bot .bubble {
-      background: var(--white);
-      box-shadow: 3px 3px 0 var(--black);
+    .meta-row {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-top: 6px;
     }
 
     .sources {
-      margin-top: 6px;
       display: flex;
       flex-wrap: wrap;
       gap: 4px;
     }
-
     .source-tag {
       font-family: 'Space Mono', monospace;
       font-size: 10px;
@@ -148,25 +164,28 @@
       color: #555;
     }
 
+    .rewrite-hint {
+      font-family: 'Space Mono', monospace;
+      font-size: 10px;
+      color: #999;
+      padding: 2px 0;
+    }
+
+    /* Typing indicator */
     .typing {
-      display: flex;
-      gap: 4px;
-      align-items: center;
+      display: flex; gap: 4px; align-items: center;
       padding: 14px 18px;
     }
-
     .typing span {
       width: 7px; height: 7px;
-      background: #aaa;
-      border-radius: 50%;
+      background: #aaa; border-radius: 50%;
       animation: bounce 1.2s infinite;
     }
-    .typing span:nth-child(2) { animation-delay: 0.2s; }
-    .typing span:nth-child(3) { animation-delay: 0.4s; }
-
+    .typing span:nth-child(2) { animation-delay: .2s; }
+    .typing span:nth-child(3) { animation-delay: .4s; }
     @keyframes bounce {
-      0%, 80%, 100% { transform: translateY(0); }
-      40% { transform: translateY(-6px); }
+      0%,80%,100% { transform: translateY(0); }
+      40%         { transform: translateY(-6px); }
     }
 
     /* ── Input bar ── */
@@ -176,6 +195,19 @@
       padding: 14px 20px;
       display: flex;
       gap: 10px;
+      flex-shrink: 0;
+      align-items: center;
+    }
+
+    #dept-filter {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 10px 10px;
+      border: var(--border);
+      border-radius: 6px;
+      background: var(--gray);
+      cursor: pointer;
       flex-shrink: 0;
     }
 
@@ -190,7 +222,6 @@
       resize: none;
       height: 44px;
     }
-
     #question-input:focus { box-shadow: 3px 3px 0 var(--black); }
 
     #send-btn {
@@ -203,11 +234,11 @@
       border-radius: 6px;
       cursor: pointer;
       box-shadow: 3px 3px 0 #555;
+      flex-shrink: 0;
     }
-
     #send-btn:hover { box-shadow: 4px 4px 0 #555; transform: translate(-1px,-1px); }
 
-    /* ── Welcome message ── */
+    /* ── Welcome ── */
     #welcome {
       text-align: center;
       color: #999;
@@ -215,7 +246,6 @@
       font-size: 14px;
       line-height: 2;
     }
-
     #welcome .icon { font-size: 40px; display: block; margin-bottom: 8px; }
   </style>
 </head>
@@ -226,14 +256,19 @@
   <span id="stats-badge">Đang tải...</span>
 </header>
 
-<div id="upload-bar">
-  <label>📎 Upload PDF:</label>
+<!-- Toolbar: Upload + Ingest -->
+<div id="toolbar">
+  <span class="toolbar-label">📎 Upload PDF:</span>
+  <select id="dept-upload" title="Phòng ban của tài liệu">
+    <option value="General">General</option>
+  </select>
   <input type="file" id="file-input" accept=".pdf" multiple />
   <button class="btn" onclick="document.getElementById('file-input').click()">Chọn file</button>
   <button class="btn secondary" onclick="ingestAll()">🔄 Index lại tất cả</button>
-  <span id="upload-status"></span>
+  <span id="status-msg"></span>
 </div>
 
+<!-- Chat messages -->
 <div id="chat-container">
   <div id="welcome">
     <span class="icon">💬</span>
@@ -242,42 +277,69 @@
   </div>
 </div>
 
+<!-- Input bar with department filter -->
 <div id="input-bar">
+  <select id="dept-filter" title="Lọc theo phòng ban">
+    <option value="all">🏢 Tất cả</option>
+  </select>
   <textarea id="question-input" placeholder="Nhập câu hỏi... (Enter để gửi, Shift+Enter xuống dòng)"></textarea>
   <button id="send-btn" onclick="sendQuestion()">➤</button>
 </div>
 
 <script>
-  const API = '';  // Same origin
+  const API = '';
 
-  // ── Load stats ───────────────────────────────────────────────────────────
+  // ── Stats & departments ──────────────────────────────────────────────────
   async function loadStats() {
     try {
-      const res = await fetch(`${API}/api/stats`);
+      const res  = await fetch(`${API}/api/stats`);
       const data = await res.json();
       document.getElementById('stats-badge').textContent =
         `${data.total_files} file · ${data.total_chunks} chunks`;
+      updateDeptSelects(data.departments || []);
     } catch {
       document.getElementById('stats-badge').textContent = 'Offline';
     }
+  }
+
+  function updateDeptSelects(depts) {
+    const uploadSel = document.getElementById('dept-upload');
+    const filterSel = document.getElementById('dept-filter');
+    const uploadVal = uploadSel.value;
+    const filterVal = filterSel.value;
+
+    // Fixed options for upload select
+    const allDepts = ['General', 'HR', 'IT', 'Finance', 'Operations', 'Marketing', ...depts];
+    const uniqueDepts = [...new Set(allDepts)].sort();
+
+    uploadSel.innerHTML = uniqueDepts.map(d =>
+      `<option value="${d}" ${d === uploadVal ? 'selected' : ''}>${d}</option>`
+    ).join('');
+
+    // Filter select: "all" + departments that have docs
+    filterSel.innerHTML = `<option value="all">🏢 Tất cả</option>` +
+      depts.map(d => `<option value="${d}" ${d === filterVal ? 'selected' : ''}>📁 ${d}</option>`).join('');
   }
 
   // ── Upload ───────────────────────────────────────────────────────────────
   document.getElementById('file-input').addEventListener('change', async (e) => {
     const files = Array.from(e.target.files);
     if (!files.length) return;
-    const status = document.getElementById('upload-status');
+    const status = document.getElementById('status-msg');
+    const dept   = document.getElementById('dept-upload').value;
 
     for (const file of files) {
-      status.textContent = `⏳ Đang upload ${file.name}...`;
+      status.textContent = `⏳ Uploading ${file.name} → [${dept}]...`;
       const formData = new FormData();
       formData.append('file', file);
       try {
-        const res = await fetch(`${API}/api/upload`, { method: 'POST', body: formData });
+        const res  = await fetch(`${API}/api/upload?department=${encodeURIComponent(dept)}`, {
+          method: 'POST', body: formData
+        });
         const data = await res.json();
         status.textContent = `✅ ${data.message}`;
       } catch (err) {
-        status.textContent = `❌ Lỗi upload: ${err.message}`;
+        status.textContent = `❌ Lỗi: ${err.message}`;
       }
     }
     e.target.value = '';
@@ -285,52 +347,64 @@
   });
 
   async function ingestAll() {
-    const status = document.getElementById('upload-status');
-    status.textContent = '⏳ Đang index lại toàn bộ...';
+    const status = document.getElementById('status-msg');
+    status.textContent = '⏳ Đang index lại toàn bộ tài liệu...';
     try {
-      const res = await fetch(`${API}/api/ingest-all`, { method: 'POST' });
+      const res  = await fetch(`${API}/api/ingest-all`, { method: 'POST' });
       const data = await res.json();
       status.textContent = `✅ ${data.message}`;
       loadStats();
     } catch (err) {
-      status.textContent = `❌ Lỗi: ${err.message}`;
+      status.textContent = `❌ ${err.message}`;
     }
   }
 
   // ── Chat ─────────────────────────────────────────────────────────────────
   const chatContainer = document.getElementById('chat-container');
-  const input = document.getElementById('question-input');
+  const inputEl       = document.getElementById('question-input');
 
   function removeWelcome() {
-    const w = document.getElementById('welcome');
-    if (w) w.remove();
+    document.getElementById('welcome')?.remove();
   }
 
-  function addMessage(role, text, sources = []) {
+  function addMessage(role, text, sources = [], rewritten = '') {
     removeWelcome();
-    const div = document.createElement('div');
+    const div    = document.createElement('div');
     div.className = `message ${role}`;
 
-    const bubble = document.createElement('div');
+    const bubble  = document.createElement('div');
     bubble.className = 'bubble';
     bubble.textContent = text;
     div.appendChild(bubble);
 
-    if (sources.length) {
-      const src = document.createElement('div');
-      src.className = 'sources';
-      sources.forEach(s => {
-        const tag = document.createElement('span');
-        tag.className = 'source-tag';
-        tag.textContent = '📄 ' + s;
-        src.appendChild(tag);
-      });
-      div.appendChild(src);
+    if (role === 'bot') {
+      const meta = document.createElement('div');
+      meta.className = 'meta-row';
+
+      if (rewritten && rewritten !== text) {
+        const hint = document.createElement('div');
+        hint.className = 'rewrite-hint';
+        hint.textContent = `🔍 Đã tìm: "${rewritten}"`;
+        meta.appendChild(hint);
+      }
+
+      if (sources.length) {
+        const srcRow = document.createElement('div');
+        srcRow.className = 'sources';
+        sources.forEach(s => {
+          const tag = document.createElement('span');
+          tag.className = 'source-tag';
+          tag.textContent = '📄 ' + s;
+          srcRow.appendChild(tag);
+        });
+        meta.appendChild(srcRow);
+      }
+
+      div.appendChild(meta);
     }
 
     chatContainer.appendChild(div);
     chatContainer.scrollTop = chatContainer.scrollHeight;
-    return div;
   }
 
   function addTyping() {
@@ -344,42 +418,38 @@
   }
 
   function removeTyping() {
-    const t = document.getElementById('typing-indicator');
-    if (t) t.remove();
+    document.getElementById('typing-indicator')?.remove();
   }
 
   async function sendQuestion() {
-    const q = input.value.trim();
+    const q    = inputEl.value.trim();
+    const dept = document.getElementById('dept-filter').value;
     if (!q) return;
 
-    input.value = '';
-    input.style.height = '44px';
+    inputEl.value = '';
     addMessage('user', q);
     addTyping();
 
     try {
-      const res = await fetch(`${API}/api/chat`, {
+      const res  = await fetch(`${API}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: q })
+        body: JSON.stringify({ question: q, department: dept })
       });
       const data = await res.json();
       removeTyping();
-      addMessage('bot', data.answer, data.sources || []);
+      addMessage('bot', data.answer, data.sources || [], data.rewritten_query || '');
     } catch (err) {
       removeTyping();
       addMessage('bot', `❌ Lỗi kết nối: ${err.message}`);
     }
   }
 
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      sendQuestion();
-    }
+  inputEl.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendQuestion(); }
   });
 
-  // ── Init ──────────────────────────────────────────────────────────────────
+  // ── Init ─────────────────────────────────────────────────────────────────
   loadStats();
   setInterval(loadStats, 30000);
 </script>
