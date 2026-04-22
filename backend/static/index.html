@@ -265,6 +265,7 @@
   <input type="file" id="file-input" accept=".pdf" multiple />
   <button class="btn" onclick="document.getElementById('file-input').click()">Chọn file</button>
   <button class="btn secondary" onclick="ingestAll()">🔄 Index lại tất cả</button>
+  <button class="btn secondary" style="background: #ffcdd2;" onclick="resetDB()">🗑️ Xóa trắng DB</button>
   <span id="status-msg"></span>
 </div>
 
@@ -351,6 +352,20 @@
     status.textContent = '⏳ Đang index lại toàn bộ tài liệu...';
     try {
       const res  = await fetch(`${API}/api/ingest-all`, { method: 'POST' });
+      const data = await res.json();
+      status.textContent = `✅ ${data.message}`;
+      loadStats();
+    } catch (err) {
+      status.textContent = `❌ ${err.message}`;
+    }
+  }
+
+  async function resetDB() {
+    if (!confirm('Bạn có chắc chắn muốn xóa sạch database?')) return;
+    const status = document.getElementById('status-msg');
+    status.textContent = '⏳ Đang xóa database...';
+    try {
+      const res  = await fetch(`${API}/api/reset`, { method: 'POST' });
       const data = await res.json();
       status.textContent = `✅ ${data.message}`;
       loadStats();

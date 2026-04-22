@@ -31,7 +31,8 @@ class BM25Index:
         )
         if not results["ids"]:
             self.bm25 = None
-            print("[BM25] No documents in DB yet.")
+            self.ids, self.texts, self.metas = [], [], []
+            print("[BM25] No documents in DB yet. Index cleared.")
             return
 
         self.ids   = results["ids"]

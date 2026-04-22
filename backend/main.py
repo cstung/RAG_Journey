@@ -91,4 +91,17 @@ def ingest_all_docs():
     }
 
 
+@app.post("/api/reset")
+def reset_db():
+    try:
+        # Get all IDs
+        all_data = collection.get(include=[])
+        if all_data["ids"]:
+            collection.delete(ids=all_data["ids"])
+        rebuild_index()
+        return {"status": "ok", "message": "Đã xóa sạch database"}
+    except Exception as e:
+        raise HTTPException(500, f"Lỗi khi xóa DB: {str(e)}")
+
+
 app.mount("/", StaticFiles(directory="/app/static", html=True), name="static")

@@ -133,15 +133,54 @@ def ingest_pdf(filepath: str, department: str = None, category: str = None) -> i
     return len(all_chunks)
 
 
+def prune_orphans(docs_dir: str = "/data/docs"):
+    """Delete chunks from ChromaDB whose source files no longer exist on disk."""
+    results = collection.get(include=["metadatas"])
+    if not results["ids"]:
+        return 0
+
+    ids_to_delete = []
+    seen_files    = set()
+    deleted_files = set()
+
+    for id_, meta in zip(results["ids"], results["metadatas"]):
+        file_id = meta.get("file_id")
+        if not file_id: continue
+
+        if file_id in seen_files:
+            continue # already checked this file
+        
+        # Check if file exists on disk
+        if not os.path.exists(os.path.join(docs_dir, file_id)):
+            # Find all chunks for this file_id (could be optimized but safe for now)
+            deleted_files.add(file_id)
+        
+        seen_files.add(file_id)
+
+    if deleted_files:
+        print(f"[Prune] Found {len(deleted_files)} orphan files in DB. Deleting chunks...")
+        for fid in deleted_files:
+            # Delete by metadata filter
+            collection.delete(where={"file_id": fid})
+            print(f"  - Deleted: {fid}")
+    
+    return len(deleted_files)
+
+
 def ingest_all(docs_dir: str = "/data/docs") -> list[dict]:
+    # 1. Prune orphans first
+    pruned_count = prune_orphans(docs_dir)
+    
+    # 2. Ingest current files
     results = []
     for root, _, files in os.walk(docs_dir):
         for fname in sorted(files):
             if not fname.lower().endswith(".pdf"): continue
             chunks = ingest_pdf(os.path.join(root, fname))
             results.append({"file": fname, "chunks": chunks})
+    
     total = sum(r["chunks"] for r in results)
-    print(f"\nTotal: {len(results)} files, {total} chunks.")
+    print(f"\nTotal: {len(results)} files, {total} chunks. (Pruned {pruned_count} files)")
     return results
 
 
