@@ -45,8 +45,13 @@ class BM25Index:
             return []
         scores = self.bm25.get_scores(self._tok(query))
         items  = list(zip(self.ids, self.metas, scores))
+        # Filter by department if needed
         if department and department != "all":
             items = [(id_, m, s) for id_, m, s in items if m.get("department") == department]
+        
+        # Filter out 0-score items to prevent irrelevant 'first chunks' from dominating
+        items = [it for it in items if it[2] > 0]
+        
         items.sort(key=lambda x: x[2], reverse=True)
         return items[:n]
 
@@ -103,26 +108,33 @@ def vector_search(query_text: str, n: int, department: str = None) -> list[str]:
     total = collection.count()
     if total == 0:
         return []
+    
     kwargs = dict(
         query_embeddings=[get_embedding(query_text)],
         n_results=min(n, total),
         include=["metadatas"]
     )
+    
     if department and department != "all":
-        # Count matching docs first to avoid n_results > matched
         kwargs["where"] = {"department": department}
+        # ChromaDB might error if n_results > number of matching documents
+        # We'll try to get as many as possible
         try:
             res = collection.query(**kwargs)
             return res["ids"][0]
-        except Exception:
-            # Fewer matching docs than n_results — retry with smaller n
-            kwargs["n_results"] = 1
+        except Exception as e:
+            print(f"[RAG] Vector search retry for department {department}: {e}")
+            # Fallback: get all IDs for this department and then use a safe n_results
             try:
+                all_dept = collection.get(where={"department": department}, include=[])
+                count = len(all_dept["ids"])
+                if count == 0: return []
+                kwargs["n_results"] = min(n, count)
                 res = collection.query(**kwargs)
                 return res["ids"][0]
             except Exception:
-                pass
-        return []
+                return []
+    
     res = collection.query(**kwargs)
     return res["ids"][0]
 
@@ -156,12 +168,23 @@ def query(question: str, department: str = None) -> dict:
     print(f"[RAG] Vector hits: {len(vec_ids)} | BM25 hits: {len(bm25_ids)}")
 
     merged_ids = rrf_merge(vec_ids, bm25_ids)[:TOP_K]
-    relevant   = [(t, m) for id_ in merged_ids
-                  if (t := _idx.get_text(id_)) and (m := _idx.get_meta(id_))]
+    relevant   = []
+    for id_ in merged_ids:
+        t = _idx.get_text(id_)
+        m = _idx.get_meta(id_)
+        if t and m:
+            relevant.append((t, m))
 
     if not relevant:
         return {"answer": "Không tìm thấy thông tin liên quan trong tài liệu nội bộ.",
                 "sources": [], "rewritten_query": rewritten}
+
+    # Log source diversity
+    source_counts = {}
+    for _, m in relevant:
+        fname = m.get("filename", "?")
+        source_counts[fname] = source_counts.get(fname, 0) + 1
+    print(f"[RAG] Retrieved {len(relevant)} chunks from {len(source_counts)} files: {source_counts}")
 
     context = "\n\n---\n\n".join(
         f"[{m.get('department','?')} | {m.get('filename','?')} | Trang {m.get('page','?')}]\n{d}"

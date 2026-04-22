@@ -17,12 +17,13 @@ def count_tokens(text: str) -> int:
     return len(encoder.encode(text))
 
 
-def _make_chunk(text, filename, page, idx, department, category):
-    chunk_id = hashlib.md5(f"{filename}_p{page}_c{idx}".encode()).hexdigest()
+def _make_chunk(text, file_id, page, idx, department, category, filename):
+    chunk_id = hashlib.md5(f"{file_id}_p{page}_c{idx}".encode()).hexdigest()
     return {
         "id": chunk_id,
         "text": text.strip(),
         "metadata": {
+            "file_id":    file_id,
             "filename":   filename,
             "page":       page,
             "chunk_idx":  idx,
@@ -32,19 +33,19 @@ def _make_chunk(text, filename, page, idx, department, category):
     }
 
 
-def _split_by_tokens(text, filename, page, start_idx, department, category):
+def _split_by_tokens(text, file_id, page, start_idx, department, category, filename):
     tokens = encoder.encode(text)
     chunks, pos, idx = [], 0, start_idx
     while pos < len(tokens):
         end = min(pos + MAX_CHUNK_TOKENS, len(tokens))
         chunks.append(_make_chunk(encoder.decode(tokens[pos:end]),
-                                  filename, page, idx, department, category))
+                                  file_id, page, idx, department, category, filename))
         pos += MAX_CHUNK_TOKENS - OVERLAP_TOKENS
         idx += 1
     return chunks
 
 
-def structural_chunk(text, filename, page, department, category):
+def structural_chunk(text, file_id, page, department, category, filename):
     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
     chunks, buffer, buffer_tokens, chunk_idx = [], "", 0, 0
 
@@ -52,14 +53,14 @@ def structural_chunk(text, filename, page, department, category):
         pt = count_tokens(para)
         if pt > MAX_CHUNK_TOKENS:
             if buffer and buffer_tokens >= MIN_CHUNK_TOKENS:
-                chunks.append(_make_chunk(buffer, filename, page, chunk_idx, department, category))
+                chunks.append(_make_chunk(buffer, file_id, page, chunk_idx, department, category, filename))
                 chunk_idx += 1
                 buffer, buffer_tokens = "", 0
-            sub = _split_by_tokens(para, filename, page, chunk_idx, department, category)
+            sub = _split_by_tokens(para, file_id, page, chunk_idx, department, category, filename)
             chunks.extend(sub); chunk_idx += len(sub)
         elif buffer_tokens + pt > MAX_CHUNK_TOKENS:
             if buffer_tokens >= MIN_CHUNK_TOKENS:
-                chunks.append(_make_chunk(buffer, filename, page, chunk_idx, department, category))
+                chunks.append(_make_chunk(buffer, file_id, page, chunk_idx, department, category, filename))
                 chunk_idx += 1
             buffer, buffer_tokens = para, pt
         else:
@@ -67,7 +68,7 @@ def structural_chunk(text, filename, page, department, category):
             buffer_tokens += pt
 
     if buffer and buffer_tokens >= MIN_CHUNK_TOKENS:
-        chunks.append(_make_chunk(buffer, filename, page, chunk_idx, department, category))
+        chunks.append(_make_chunk(buffer, file_id, page, chunk_idx, department, category, filename))
     return chunks
 
 
@@ -90,26 +91,33 @@ def detect_department_category(filepath: str) -> tuple[str, str]:
 
 
 def ingest_pdf(filepath: str, department: str = None, category: str = None) -> int:
+    # Use relative path as a unique ID to prevent collisions between files with same name
+    docs_dir = "/data/docs"
+    try:
+        file_id = os.path.relpath(filepath, docs_dir).replace("\\", "/")
+    except Exception:
+        file_id = os.path.basename(filepath)
+
     filename = os.path.basename(filepath)
     if department is None or category is None:
         d, c = detect_department_category(filepath)
         department = department or d
         category   = category   or c
 
-    print(f"  [{department}/{category}] {filename}")
+    print(f"  [{department}/{category}] {file_id}")
     try:
         reader = PdfReader(filepath)
     except Exception as e:
-        print(f"  ERROR: {e}"); return 0
+        print(f"  ERROR reading {filepath}: {e}"); return 0
 
     all_chunks = []
     for page_num, page in enumerate(reader.pages, 1):
         text = (page.extract_text() or "").strip()
-        if len(text) < 50: continue
-        all_chunks.extend(structural_chunk(text, filename, page_num, department, category))
+        if len(text) < 40: continue
+        all_chunks.extend(structural_chunk(text, file_id, page_num, department, category, filename))
 
     if not all_chunks:
-        print(f"  WARNING: No extractable text in {filename}"); return 0
+        print(f"  WARNING: No extractable text in {file_id}"); return 0
 
     BATCH = 50
     for i in range(0, len(all_chunks), BATCH):
