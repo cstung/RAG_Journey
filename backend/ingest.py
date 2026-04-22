@@ -8,9 +8,9 @@ from db import collection
 client  = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 encoder = tiktoken.get_encoding("cl100k_base")
 
-MAX_CHUNK_TOKENS = 600
-MIN_CHUNK_TOKENS = 80
-OVERLAP_TOKENS   = 60
+MAX_CHUNK_TOKENS = 800
+MIN_CHUNK_TOKENS = 20
+OVERLAP_TOKENS   = 100
 
 
 def count_tokens(text: str) -> int:
@@ -112,22 +112,39 @@ def ingest_pdf(filepath: str, department: str = None, category: str = None) -> i
 
     all_chunks = []
     for page_num, page in enumerate(reader.pages, 1):
-        text = (page.extract_text() or "").strip()
-        if len(text) < 40: continue
-        all_chunks.extend(structural_chunk(text, file_id, page_num, department, category, filename))
+        try:
+            text = (page.extract_text() or "").strip()
+        except Exception as e:
+            print(f"    [Page {page_num}] Error extracting text: {e}")
+            continue
+            
+        if len(text) < 10: 
+            continue
+        
+        chunks = structural_chunk(text, file_id, page_num, department, category, filename)
+        if not chunks and len(text) >= 10:
+            # Fallback: if structural chunking failed but there is text, make one chunk
+            chunks = [_make_chunk(text, file_id, page_num, 0, department, category, filename)]
+            
+        all_chunks.extend(chunks)
 
     if not all_chunks:
-        print(f"  WARNING: No extractable text in {file_id}"); return 0
+        print(f"  WARNING: No extractable text in {file_id} (Length was 0 or all pages too short)")
+        return 0
 
     BATCH = 50
-    for i in range(0, len(all_chunks), BATCH):
-        batch = all_chunks[i: i + BATCH]
-        collection.upsert(
-            ids=[c["id"] for c in batch],
-            embeddings=[get_embedding(c["text"]) for c in batch],
-            documents=[c["text"] for c in batch],
-            metadatas=[c["metadata"] for c in batch],
-        )
+    try:
+        for i in range(0, len(all_chunks), BATCH):
+            batch = all_chunks[i: i + BATCH]
+            collection.upsert(
+                ids=[c["id"] for c in batch],
+                embeddings=[get_embedding(c["text"]) for c in batch],
+                documents=[c["text"] for c in batch],
+                metadatas=[c["metadata"] for c in batch],
+            )
+    except Exception as e:
+        print(f"  CRITICAL ERROR during upsert for {file_id}: {e}")
+        return 0
 
     print(f"  → {len(all_chunks)} chunks | total in DB: {collection.count()}")
     return len(all_chunks)
