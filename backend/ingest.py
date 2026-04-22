@@ -103,28 +103,40 @@ def ingest_pdf(filepath: str, department: str = None, category: str = None) -> i
         d, c = detect_department_category(filepath)
         department = department or d
         category   = category   or c
+    print(f"  [Ingest] Processing: {file_id} ({department}/{category})")
+    
+    if not os.path.exists(filepath):
+        print(f"  ERROR: File not found at {filepath}")
+        return 0
 
     all_chunks = []
     try:
         doc = fitz.open(filepath)
+        print(f"    - Opened PDF. Pages: {len(doc)} | Encrypted: {doc.is_encrypted}")
+        if doc.is_encrypted:
+            print(f"      WARNING: This PDF is encrypted. Text extraction might fail.")
     except Exception as e:
         print(f"  ERROR opening {filepath}: {e}"); return 0
 
     total_chars = 0
     for page_num, page in enumerate(doc, 1):
         try:
-            # get_text("text") is standard, but we can also try "blocks" for better structure
-            text = page.get_text().strip()
+            # Try multiple extraction methods
+            text = page.get_text("text").strip()
+            if not text:
+                # Fallback to "blocks" if "text" is empty
+                blocks = page.get_text("blocks")
+                text = "\n".join([b[4] for b in blocks if b[4].strip()]).strip()
         except Exception as e:
             print(f"    [Page {page_num}] Error extracting text: {e}")
             continue
             
         total_chars += len(text)
-        if len(text) < 10: 
+        if len(text) < 5: 
             continue
         
         chunks = structural_chunk(text, file_id, page_num, department, category, filename)
-        if not chunks and len(text) >= 10:
+        if not chunks and len(text) >= 5:
             chunks = [_make_chunk(text, file_id, page_num, 0, department, category, filename)]
             
         all_chunks.extend(chunks)
@@ -132,15 +144,20 @@ def ingest_pdf(filepath: str, department: str = None, category: str = None) -> i
     doc.close()
 
     if not all_chunks:
-        print(f"  WARNING: No extractable text in {file_id} (Total chars: {total_chars})")
+        print(f"  WARNING: No chunks generated for {file_id} (Total chars: {total_chars})")
         if total_chars == 0:
-            print(f"  HINT: This PDF might be a scan. Try using an OCR tool before uploading.")
+            print(f"  DEBUG: Try opening this PDF and copying text manually. If that works, the PDF might have a non-standard encoding.")
         return 0
 
-    print(f"  → Extracted {total_chars} chars, generated {len(all_chunks)} chunks.")
+    print(f"    - Generated {len(all_chunks)} chunks. Starting upsert to ChromaDB...")
 
-    BATCH = 50
+    BATCH = 40
     try:
+        # Check if API key is set
+        if not os.getenv("OPENAI_API_KEY"):
+            print("  CRITICAL ERROR: OPENAI_API_KEY is not set!")
+            return 0
+            
         for i in range(0, len(all_chunks), BATCH):
             batch = all_chunks[i: i + BATCH]
             collection.upsert(
@@ -149,11 +166,12 @@ def ingest_pdf(filepath: str, department: str = None, category: str = None) -> i
                 documents=[c["text"] for c in batch],
                 metadatas=[c["metadata"] for c in batch],
             )
+            print(f"    - Upserted batch {i//BATCH + 1}/{(len(all_chunks)-1)//BATCH + 1}")
     except Exception as e:
         print(f"  CRITICAL ERROR during upsert for {file_id}: {e}")
         return 0
 
-    print(f"  → {len(all_chunks)} chunks | total in DB: {collection.count()}")
+    print(f"  → Done: {len(all_chunks)} chunks | total in DB: {collection.count()}")
     return len(all_chunks)
 
 
