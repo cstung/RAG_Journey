@@ -1,11 +1,17 @@
-import os, shutil
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from db import collection
 from rag import query as rag_query, rebuild_index, get_departments
 from ingest import ingest_pdf, ingest_all
+
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
+
+def verify_admin(x_admin_key: str = Header(None)):
+    if x_admin_key != ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="Unauthorized: Admin access required")
+    return True
 
 app = FastAPI(title="Internal Chatbot API")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -23,7 +29,7 @@ def health():
 
 
 @app.get("/api/stats")
-def stats():
+def stats(admin: bool = Depends(verify_admin)):
     pdf_files = []
     for root, _, files in os.walk(DOCS_DIR):
         for f in files:
@@ -55,6 +61,7 @@ async def upload(
     file: UploadFile = File(...),
     department: str = Query(default="General"),
     category:   str = Query(default="general"),
+    admin: bool = Depends(verify_admin)
 ):
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "Chỉ hỗ trợ file PDF")
@@ -80,7 +87,7 @@ async def upload(
 
 
 @app.post("/api/ingest-all")
-def ingest_all_docs():
+def ingest_all_docs(admin: bool = Depends(verify_admin)):
     results = ingest_all(DOCS_DIR)
     total   = sum(r["chunks"] for r in results)
     rebuild_index()
@@ -92,7 +99,7 @@ def ingest_all_docs():
 
 
 @app.post("/api/reset")
-def reset_db():
+def reset_db(admin: bool = Depends(verify_admin)):
     try:
         # Get all IDs
         all_data = collection.get(include=[])

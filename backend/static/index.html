@@ -110,6 +110,21 @@
       flex: 1;
     }
 
+    .admin-only { display: none; }
+    body.admin-mode .admin-only { display: inline-block; }
+    body.admin-mode .admin-flex { display: flex; }
+
+    #admin-login-btn {
+      font-size: 11px;
+      background: transparent;
+      border: 1px solid var(--black);
+      padding: 2px 6px;
+      border-radius: 4px;
+      cursor: pointer;
+      opacity: 0.6;
+    }
+    #admin-login-btn:hover { opacity: 1; background: rgba(0,0,0,0.05); }
+
     #file-input { display: none; }
 
     /* ── Chat area ── */
@@ -253,11 +268,14 @@
 
 <header>
   <h1>🏢 Chatbot Nội bộ</h1>
-  <span id="stats-badge">Đang tải...</span>
+  <div style="display: flex; align-items: center; gap: 8px;">
+    <span id="stats-badge" class="admin-only">Đang tải...</span>
+    <button id="admin-login-btn" onclick="toggleAdmin()">Admin</button>
+  </div>
 </header>
 
 <!-- Toolbar: Upload + Ingest -->
-<div id="toolbar">
+<div id="toolbar" class="admin-only admin-flex">
   <span class="toolbar-label">📎 Upload PDF:</span>
   <select id="dept-upload" title="Phòng ban của tài liệu">
     <option value="General">General</option>
@@ -289,11 +307,50 @@
 
 <script>
   const API = '';
+  let ADMIN_KEY = localStorage.getItem('admin_key') || "";
+
+  if (ADMIN_KEY) {
+    document.body.classList.add('admin-mode');
+    document.getElementById('admin-login-btn').textContent = 'Logout';
+  }
+
+  function toggleAdmin() {
+    if (ADMIN_KEY) {
+      ADMIN_KEY = "";
+      localStorage.removeItem('admin_key');
+      document.body.classList.remove('admin-mode');
+      document.getElementById('admin-login-btn').textContent = 'Admin';
+      location.reload(); 
+    } else {
+      const pass = prompt("Nhập mật khẩu Admin:");
+      if (pass) {
+        ADMIN_KEY = pass;
+        localStorage.setItem('admin_key', pass);
+        document.body.classList.add('admin-mode');
+        document.getElementById('admin-login-btn').textContent = 'Logout';
+        loadStats();
+      }
+    }
+  }
+
+  async function adminFetch(url, options = {}) {
+    if (!options.headers) options.headers = {};
+    options.headers['X-Admin-Key'] = ADMIN_KEY;
+    const res = await fetch(url, options);
+    if (res.status === 401) {
+      alert("Hết phiên làm việc hoặc mật khẩu sai. Vui lòng đăng nhập lại.");
+      ADMIN_KEY = "";
+      localStorage.removeItem('admin_key');
+      location.reload();
+    }
+    return res;
+  }
 
   // ── Stats & departments ──────────────────────────────────────────────────
   async function loadStats() {
+    if (!ADMIN_KEY) return;
     try {
-      const res  = await fetch(`${API}/api/stats`);
+      const res  = await adminFetch(`${API}/api/stats`);
       const data = await res.json();
       document.getElementById('stats-badge').textContent =
         `${data.total_files} file · ${data.total_chunks} chunks`;
@@ -334,7 +391,7 @@
       const formData = new FormData();
       formData.append('file', file);
       try {
-        const res  = await fetch(`${API}/api/upload?department=${encodeURIComponent(dept)}`, {
+        const res  = await adminFetch(`${API}/api/upload?department=${encodeURIComponent(dept)}`, {
           method: 'POST', body: formData
         });
         const data = await res.json();
@@ -351,7 +408,7 @@
     const status = document.getElementById('status-msg');
     status.textContent = '⏳ Đang index lại toàn bộ tài liệu...';
     try {
-      const res  = await fetch(`${API}/api/ingest-all`, { method: 'POST' });
+      const res  = await adminFetch(`${API}/api/ingest-all`, { method: 'POST' });
       const data = await res.json();
       status.textContent = `✅ ${data.message}`;
       loadStats();
@@ -365,7 +422,7 @@
     const status = document.getElementById('status-msg');
     status.textContent = '⏳ Đang xóa database...';
     try {
-      const res  = await fetch(`${API}/api/reset`, { method: 'POST' });
+      const res  = await adminFetch(`${API}/api/reset`, { method: 'POST' });
       const data = await res.json();
       status.textContent = `✅ ${data.message}`;
       loadStats();
