@@ -1,7 +1,7 @@
 import os
 import hashlib
 from openai import OpenAI
-from pypdf import PdfReader
+import fitz  # PyMuPDF
 import tiktoken
 from db import collection
 
@@ -104,33 +104,40 @@ def ingest_pdf(filepath: str, department: str = None, category: str = None) -> i
         department = department or d
         category   = category   or c
 
-    print(f"  [{department}/{category}] {file_id}")
-    try:
-        reader = PdfReader(filepath)
-    except Exception as e:
-        print(f"  ERROR reading {filepath}: {e}"); return 0
-
     all_chunks = []
-    for page_num, page in enumerate(reader.pages, 1):
+    try:
+        doc = fitz.open(filepath)
+    except Exception as e:
+        print(f"  ERROR opening {filepath}: {e}"); return 0
+
+    total_chars = 0
+    for page_num, page in enumerate(doc, 1):
         try:
-            text = (page.extract_text() or "").strip()
+            # get_text("text") is standard, but we can also try "blocks" for better structure
+            text = page.get_text().strip()
         except Exception as e:
             print(f"    [Page {page_num}] Error extracting text: {e}")
             continue
             
+        total_chars += len(text)
         if len(text) < 10: 
             continue
         
         chunks = structural_chunk(text, file_id, page_num, department, category, filename)
         if not chunks and len(text) >= 10:
-            # Fallback: if structural chunking failed but there is text, make one chunk
             chunks = [_make_chunk(text, file_id, page_num, 0, department, category, filename)]
             
         all_chunks.extend(chunks)
 
+    doc.close()
+
     if not all_chunks:
-        print(f"  WARNING: No extractable text in {file_id} (Length was 0 or all pages too short)")
+        print(f"  WARNING: No extractable text in {file_id} (Total chars: {total_chars})")
+        if total_chars == 0:
+            print(f"  HINT: This PDF might be a scan. Try using an OCR tool before uploading.")
         return 0
+
+    print(f"  → Extracted {total_chars} chars, generated {len(all_chunks)} chunks.")
 
     BATCH = 50
     try:
