@@ -4,7 +4,7 @@ WORKDIR /app
 
 # Install system deps for chromadb
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc g++ curl tesseract-ocr tesseract-ocr-vie poppler-utils && \
+    gcc g++ curl tesseract-ocr tesseract-ocr-vie poppler-utils antiword && \
     rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

@@ -1,5 +1,6 @@
 import os
 import hashlib
+import subprocess
 from openai import OpenAI
 import fitz  # PyMuPDF
 import pytesseract
@@ -330,6 +331,29 @@ def ingest_docx(filepath: str, department: str = None, category: str = None, doc
     return ingest_text(text, filepath, department, category, document_id=document_id, version=version)
 
 
+def ingest_doc(filepath: str, department: str = None, category: str = None, document_id=None, version=None) -> int:
+    if not os.path.exists(filepath):
+        print(f"  ERROR: File not found at {filepath}")
+        return 0
+
+    filename = os.path.basename(filepath)
+    if department is None or category is None:
+        d, c = detect_department_category(filepath)
+        department = department or d
+        category = category or c
+
+    print(f"  [Ingest] Processing DOC: {filename} ({department}/{category}) v{version if version is not None else '?'}")
+    try:
+        # Use antiword to extract text from legacy .doc files
+        res = subprocess.run(["antiword", filepath], capture_output=True, text=True, check=True)
+        text = res.stdout.strip()
+    except Exception as e:
+        print(f"  ERROR parsing DOC {filepath}: {e}")
+        return 0
+
+    return ingest_text(text, filepath, department, category, document_id=document_id, version=version)
+
+
 def ingest_txt(filepath: str, department: str = None, category: str = None, document_id=None, version=None) -> int:
     if not os.path.exists(filepath):
         print(f"  ERROR: File not found at {filepath}")
@@ -381,6 +405,8 @@ def ingest_file(filepath: str, department: str = None, category: str = None, doc
         return ingest_pdf(filepath, department=department, category=category, document_id=document_id, version=version)
     if ext == ".docx":
         return ingest_docx(filepath, department=department, category=category, document_id=document_id, version=version)
+    if ext == ".doc":
+        return ingest_doc(filepath, department=department, category=category, document_id=document_id, version=version)
     if ext == ".txt":
         return ingest_txt(filepath, department=department, category=category, document_id=document_id, version=version)
     if ext in (".html", ".htm"):
