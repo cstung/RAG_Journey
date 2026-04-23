@@ -226,14 +226,17 @@ def query(question: str, department: str = None, history: list[dict] | None = No
         model=LLM_MODEL,
         messages=[
             {"role": "system", "content": (
-                f"Bạn là trợ lý nội bộ của {COMPANY_NAME}. "
-                "Trả lời dựa trên tài liệu được cung cấp, ngắn gọn, rõ ràng bằng tiếng Việt. "
-                "Không bịa đặt ngoài phạm vi tài liệu."
+                f"Bạn là trợ lý nội bộ chuyên tra cứu tài liệu của {COMPANY_NAME}.\n\n"
+                "QUY TẮC BẮT BUỘC:\n"
+                "1. CHỈ trả lời dựa trên phần 'TÀI LIỆU' được cung cấp bên dưới.\n"
+                "2. Nếu thông tin KHÔNG có trong tài liệu, hãy trả lời: 'Tôi không tìm thấy thông tin này trong tài liệu nội bộ.' Tuyệt đối không tự bịa ra câu trả lời hoặc dùng kiến thức bên ngoài.\n"
+                "3. Luôn trích dẫn tên tài liệu ở cuối câu trả lời nếu có thông tin (ví dụ: [Nguồn: file_name.pdf]).\n"
+                "4. Trả lời bằng tiếng Việt, ngắn gọn, trung thực và chuyên nghiệp."
             )},
             *hist_msgs,
             {"role": "user", "content": f"TÀI LIỆU:\n{context}\n\nCÂU HỎI: {question}"}
         ],
-        temperature=0.1, max_tokens=1000
+        temperature=0.0, max_tokens=1000
     )
 
     return {
