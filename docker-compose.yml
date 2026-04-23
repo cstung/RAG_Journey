@@ -1,6 +1,8 @@
 services:
   chatbot:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: internal-chatbot
     restart: unless-stopped
     ports:
