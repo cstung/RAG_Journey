@@ -1,0 +1,7 @@
+.env
+
+# Runtime data
+data/docs/**
+data/chroma/**
+data/sqlite/**
+!data/**/.gitkeep

@@ -10,7 +10,9 @@ services:
       - COMPANY_NAME=${COMPANY_NAME:-Công ty}
       - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
       - TOP_K=${TOP_K:-5}
+      - SQLITE_PATH=${SQLITE_PATH:-/data/sqlite/chatbot.db}
     volumes:
+      - ./data/sqlite:/data/sqlite    # SQLite DB (sessions/feedback/admins)
       - ./data/docs:/data/docs        # Thả PDF vào đây
       - ./data/chroma:/data/chroma    # Vector DB tự lưu
     healthcheck:

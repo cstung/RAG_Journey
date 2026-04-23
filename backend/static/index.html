@@ -308,6 +308,8 @@
 <script>
   const API = '';
   let ADMIN_KEY = localStorage.getItem('admin_key') || "";
+  let USER_NAME = localStorage.getItem('user_name') || "";
+  let SESSION_ID = localStorage.getItem('session_id') || "";
 
   if (ADMIN_KEY) {
     document.body.classList.add('admin-mode');
@@ -435,6 +437,28 @@
   const chatContainer = document.getElementById('chat-container');
   const inputEl       = document.getElementById('question-input');
 
+  async function ensureSession() {
+    if (!USER_NAME) {
+      USER_NAME = prompt("Nhập tên của bạn:");
+      if (!USER_NAME) USER_NAME = "Guest";
+      USER_NAME = USER_NAME.trim() || "Guest";
+      localStorage.setItem('user_name', USER_NAME);
+    }
+
+    if (SESSION_ID) return SESSION_ID;
+
+    const res = await fetch(`${API}/api/session/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_name: USER_NAME, user_lang: 'vi' })
+    });
+    if (!res.ok) throw new Error(`Không thể tạo phiên làm việc (${res.status})`);
+    const data = await res.json();
+    SESSION_ID = data.session_id;
+    localStorage.setItem('session_id', SESSION_ID);
+    return SESSION_ID;
+  }
+
   function removeWelcome() {
     document.getElementById('welcome')?.remove();
   }
@@ -503,11 +527,19 @@
     addTyping();
 
     try {
+      await ensureSession();
       const res  = await fetch(`${API}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: q, department: dept })
+        body: JSON.stringify({ question: q, department: dept, session_id: SESSION_ID })
       });
+      if (res.status === 404) {
+        localStorage.removeItem('session_id');
+        SESSION_ID = "";
+        removeTyping();
+        addMessage('bot', '⚠️ Phiên làm việc không tồn tại. Vui lòng gửi lại câu hỏi.');
+        return;
+      }
       const data = await res.json();
       removeTyping();
       addMessage('bot', data.answer, data.sources || [], data.rewritten_query || '');
@@ -522,6 +554,7 @@
   });
 
   // ── Init ─────────────────────────────────────────────────────────────────
+  ensureSession().catch(() => {});
   loadStats();
   setInterval(loadStats, 30000);
 </script>
