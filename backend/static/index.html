@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Chatbot Nội bộ</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=Space+Mono&display=swap');
 
@@ -318,6 +319,15 @@
       0%,80%,100% { transform: translateY(0); }
       40%         { transform: translateY(-6px); }
     }
+
+    /* Markdown styling inside bubbles */
+    .bubble h1, .bubble h2, .bubble h3 { margin: 8px 0; font-size: 1.1em; }
+    .bubble p { margin-bottom: 8px; }
+    .bubble p:last-child { margin-bottom: 0; }
+    .bubble ul, .bubble ol { margin-left: 20px; margin-bottom: 8px; }
+    .bubble li { margin-bottom: 4px; }
+    .bubble code { font-family: 'Space Mono', monospace; background: rgba(0,0,0,0.05); padding: 2px 4px; border-radius: 3px; font-size: 0.9em; }
+    .bubble pre { background: #f8f8f8; padding: 10px; border-radius: 6px; overflow-x: auto; margin: 8px 0; border: 1px solid #ddd; }
 
     /* ── Input bar ── */
     #input-bar {
@@ -1021,7 +1031,11 @@
 
     const bubble  = document.createElement('div');
     bubble.className = 'bubble';
-    bubble.textContent = text;
+    if (role === 'bot') {
+      bubble.innerHTML = marked.parse(text);
+    } else {
+      bubble.textContent = text;
+    }
     div.appendChild(bubble);
 
     if (role === 'bot') {
