@@ -177,7 +177,7 @@ def admin_login(req: AdminLoginRequest):
 
 
 @app.get("/api/stats")
-def stats(admin: bool = Depends(verify_admin)):
+def stats():
     return _stats_payload()
 
 
@@ -675,4 +675,35 @@ def _handle_reset():
         raise HTTPException(500, f"Lỗi khi xóa DB: {str(e)}")
 
 
-app.mount("/", StaticFiles(directory="/app/static", html=True), name="static")
+def _first_existing_dir(paths: list[str]) -> str | None:
+    for p in paths:
+        try:
+            if p and os.path.isdir(p):
+                return p
+        except Exception:
+            continue
+    return None
+
+
+# Prefer serving the built React frontend when present.
+# - Local dev build:   <repo>/frontend/dist
+# - Optional copy-in:  <repo>/backend/frontend/dist
+_BACKEND_DIR = os.path.dirname(__file__)
+_FRONTEND_DIST = _first_existing_dir(
+    [
+        os.path.join(_BACKEND_DIR, "frontend", "dist"),
+        os.path.abspath(os.path.join(_BACKEND_DIR, "..", "frontend", "dist")),
+    ]
+)
+
+if _FRONTEND_DIST:
+    app.mount("/", StaticFiles(directory=_FRONTEND_DIST, html=True), name="frontend")
+else:
+    _STATIC_DIR = _first_existing_dir(
+        [
+            os.path.join(_BACKEND_DIR, "static"),
+            "/app/static",
+        ]
+    )
+    if _STATIC_DIR:
+        app.mount("/", StaticFiles(directory=_STATIC_DIR, html=True), name="static")

@@ -1,0 +1,212 @@
+@import url('https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;600;700;800&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Lotte World Aquarium Hanoi — Brand System
+ * "A joyful aquatic world that connects hearts."
+ * Ocean (Life · Wonder · Flow) + Joy (Play · Music · Emotion) + Culture (Vietnam · Harmony · Connection)
+ * All colors MUST be HSL.
+ */
+
+@layer base {
+  :root {
+    /* ── Brand Palette (HSL) ───────────────────────────────────────────── */
+    --shell: 47 33% 97%;            /* #F7F5EF – page bg */
+    --ocean: 200 100% 42%;          /* #0096D6 – primary */
+    --ocean-deep: 209 86% 28%;      /* deeper headline blue */
+    --ocean-glow: 200 100% 55%;
+    --bubble: 192 60% 85%;          /* #9ED7E6 */
+    --coral: 354 84% 53%;           /* #ED1C24 – accent / CTA */
+    --coral-soft: 350 80% 88%;      /* #F6B6C8 – pink */
+    --sun: 50 100% 50%;             /* #FFD200 – joy accent */
+    --sea-brown: 22 47% 40%;        /* #7A4A26 */
+    --ink: 209 86% 14%;             /* deep navy text */
+    --ink-soft: 209 30% 35%;
+
+    /* ── Semantic tokens ───────────────────────────────────────────────── */
+    --background: var(--shell);
+    --foreground: var(--ink);
+
+    --card: 0 0% 100%;
+    --card-foreground: var(--ink);
+
+    --popover: 0 0% 100%;
+    --popover-foreground: var(--ink);
+
+    --primary: var(--ocean);
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 200 60% 96%;
+    --secondary-foreground: var(--ocean-deep);
+
+    --muted: 200 30% 95%;
+    --muted-foreground: var(--ink-soft);
+
+    --accent: var(--coral);
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: var(--coral);
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 158 64% 42%;
+
+    --border: 200 40% 88%;
+    --input: 200 40% 90%;
+    --ring: var(--ocean);
+
+    --radius: 1rem;
+
+    /* Gradients & shadows */
+    --gradient-ocean: linear-gradient(135deg, hsl(var(--ocean)) 0%, hsl(var(--ocean-glow)) 100%);
+    --gradient-surface: linear-gradient(180deg, hsl(var(--shell)) 0%, hsl(var(--bubble) / 0.45) 100%);
+    --gradient-joy: linear-gradient(135deg, hsl(var(--sun)) 0%, hsl(var(--coral)) 100%);
+
+    --shadow-soft: 0 1px 2px hsl(var(--ocean-deep) / 0.06), 0 8px 24px -12px hsl(var(--ocean-deep) / 0.18);
+    --shadow-float: 0 12px 40px -16px hsl(var(--ocean-deep) / 0.28);
+    --shadow-ring: 0 0 0 4px hsl(var(--ocean) / 0.18);
+
+    --transition-base: 200ms cubic-bezier(0.4, 0, 0.2, 1);
+
+    /* Sidebar (unused but kept for shadcn) */
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: var(--ink);
+    --sidebar-primary: var(--ocean);
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 200 60% 96%;
+    --sidebar-accent-foreground: var(--ocean-deep);
+    --sidebar-border: 200 40% 88%;
+    --sidebar-ring: var(--ocean);
+  }
+
+  .dark {
+    --background: 209 60% 8%;
+    --foreground: 200 30% 96%;
+    --card: 209 50% 12%;
+    --card-foreground: 200 30% 96%;
+    --popover: 209 50% 12%;
+    --popover-foreground: 200 30% 96%;
+    --primary: 200 100% 55%;
+    --primary-foreground: 209 86% 14%;
+    --secondary: 209 40% 18%;
+    --secondary-foreground: 200 30% 96%;
+    --muted: 209 40% 18%;
+    --muted-foreground: 200 20% 70%;
+    --accent: 354 84% 60%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 354 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 209 40% 22%;
+    --input: 209 40% 22%;
+    --ring: 200 100% 55%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html, body, #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Nunito Sans', system-ui, -apple-system, sans-serif;
+    background-image: var(--gradient-surface);
+    background-attachment: fixed;
+  }
+  h1, h2, h3, h4, h5 {
+    font-family: 'Plus Jakarta Sans', 'Nunito Sans', sans-serif;
+    letter-spacing: -0.01em;
+  }
+}
+
+@layer components {
+  .brand-wave {
+    background: var(--gradient-ocean);
+  }
+  .glass-card {
+    background: hsl(var(--card) / 0.85);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid hsl(var(--border));
+    box-shadow: var(--shadow-soft);
+  }
+  .focus-ring {
+    @apply outline-none ring-offset-background transition-all;
+  }
+  .focus-ring:focus-visible {
+    box-shadow: var(--shadow-ring);
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--ocean) / 0.4) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar { width: 8px; height: 8px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: hsl(var(--ocean) / 0.35);
+    border-radius: 999px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--ocean) / 0.6);
+  }
+
+  .animate-bubble {
+    animation: bubble-rise 4s ease-in-out infinite;
+  }
+  .animate-float {
+    animation: float 3.5s ease-in-out infinite;
+  }
+}
+
+@keyframes bubble-rise {
+  0%, 100% { transform: translateY(0) scale(1); opacity: 0.6; }
+  50% { transform: translateY(-12px) scale(1.05); opacity: 1; }
+}
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+@keyframes typing-bounce {
+  0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+  40% { transform: translateY(-6px); opacity: 1; }
+}
+
+/* Markdown content inside chat bubbles */
+.prose-bubble {
+  font-size: 0.95rem;
+  line-height: 1.65;
+}
+.prose-bubble > * + * { margin-top: 0.6em; }
+.prose-bubble h1, .prose-bubble h2, .prose-bubble h3 {
+  font-weight: 700;
+  font-size: 1.05em;
+  color: hsl(var(--ocean-deep));
+}
+.prose-bubble ul, .prose-bubble ol { padding-left: 1.25rem; }
+.prose-bubble ul { list-style: disc; }
+.prose-bubble ol { list-style: decimal; }
+.prose-bubble li + li { margin-top: 0.25rem; }
+.prose-bubble code {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  background: hsl(var(--muted));
+  padding: 0.1em 0.35em;
+  border-radius: 0.35em;
+  font-size: 0.9em;
+}
+.prose-bubble pre {
+  background: hsl(var(--ink) / 0.04);
+  border: 1px solid hsl(var(--border));
+  padding: 0.75rem 1rem;
+  border-radius: 0.75rem;
+  overflow-x: auto;
+}
+.prose-bubble pre code { background: transparent; padding: 0; }
+.prose-bubble a { color: hsl(var(--ocean)); text-decoration: underline; text-underline-offset: 2px; }
+.prose-bubble strong { color: hsl(var(--ocean-deep)); font-weight: 700; }

@@ -1,0 +1,1220 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chatbot Nội bộ</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=Space+Mono&display=swap');
+
+    :root {
+      --yellow: #FFE500;
+      --black:  #0D0D0D;
+      --white:  #FAFAFA;
+      --gray:   #F0F0F0;
+      --green:  #00C853;
+      --border: 2px solid #0D0D0D;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Space Grotesk', sans-serif;
+      background: var(--gray);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--yellow);
+      border-bottom: var(--border);
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+      gap: 12px;
+    }
+    header h1 { font-size: 17px; font-weight: 700; white-space: nowrap; }
+    #stats-badge {
+      font-family: 'Space Mono', monospace;
+      font-size: 11px;
+      background: var(--black);
+      color: var(--yellow);
+      padding: 4px 10px;
+      border-radius: 100px;
+      white-space: nowrap;
+    }
+
+    /* ── Toolbar ── */
+    #toolbar {
+      background: var(--white);
+      border-bottom: var(--border);
+      padding: 10px 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      flex-shrink: 0;
+    }
+
+    .toolbar-label { font-size: 13px; font-weight: 600; white-space: nowrap; }
+
+    .btn {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 13px;
+      font-weight: 700;
+      padding: 7px 14px;
+      border: var(--border);
+      background: var(--yellow);
+      cursor: pointer;
+      border-radius: 4px;
+      box-shadow: 2px 2px 0 var(--black);
+      transition: transform .1s, box-shadow .1s;
+      white-space: nowrap;
+    }
+    .btn:hover  { transform: translate(-1px,-1px); box-shadow: 3px 3px 0 var(--black); }
+    .btn:active { transform: translate(1px,1px);   box-shadow: 1px 1px 0 var(--black); }
+    .btn.secondary { background: var(--white); }
+
+    select {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 7px 10px;
+      border: var(--border);
+      border-radius: 4px;
+      background: var(--white);
+      cursor: pointer;
+      box-shadow: 2px 2px 0 var(--black);
+    }
+
+    #dept-upload {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 7px 10px;
+      border: var(--border);
+      border-radius: 4px;
+      background: var(--white);
+      cursor: pointer;
+      box-shadow: 2px 2px 0 var(--black);
+    }
+
+    #status-msg {
+      font-family: 'Space Mono', monospace;
+      font-size: 11px;
+      color: #555;
+      flex: 1;
+    }
+
+    /* ── Admin Panel ── */
+    #admin-panel {
+      background: var(--white);
+      border-bottom: var(--border);
+      padding: 12px 20px;
+    }
+
+    #admin-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 12px;
+      align-items: center;
+    }
+
+    .tab-btn {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 6px 10px;
+      border: var(--border);
+      background: var(--white);
+      cursor: pointer;
+      border-radius: 4px;
+      box-shadow: 2px 2px 0 var(--black);
+    }
+    .tab-btn.active { background: var(--yellow); }
+
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    .admin-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .card {
+      border: var(--border);
+      background: var(--white);
+      border-radius: 6px;
+      padding: 12px;
+      box-shadow: 2px 2px 0 var(--black);
+    }
+
+    .card h3 { font-size: 13px; font-weight: 800; margin-bottom: 8px; }
+
+    .table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    .table th, .table td {
+      border: 1px solid #ddd;
+      padding: 8px;
+      vertical-align: top;
+    }
+    .table th { background: #fafafa; text-align: left; }
+
+    .filters {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 10px;
+      align-items: center;
+    }
+
+    .filters input {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 7px 10px;
+      border: var(--border);
+      border-radius: 4px;
+      background: var(--white);
+      box-shadow: 2px 2px 0 var(--black);
+    }
+
+    .pager {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      justify-content: flex-end;
+      margin-top: 10px;
+    }
+
+    /* ── Modal ── */
+    #modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.45);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      z-index: 999;
+    }
+    #modal.show { display: flex; }
+    #modal .modal-content {
+      width: min(900px, 95vw);
+      max-height: 85vh;
+      overflow: auto;
+      background: var(--white);
+      border: var(--border);
+      border-radius: 8px;
+      box-shadow: 6px 6px 0 var(--black);
+      padding: 14px;
+    }
+    #modal pre {
+      white-space: pre-wrap;
+      font-family: 'Space Mono', monospace;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .admin-only { display: none; }
+    body.admin-mode .admin-only { display: inline-block; }
+    body.admin-mode .admin-flex { display: flex; }
+    body.admin-mode #admin-panel { display: block; }
+
+    #admin-login-btn {
+      font-size: 11px;
+      background: transparent;
+      border: 1px solid var(--black);
+      padding: 2px 6px;
+      border-radius: 4px;
+      cursor: pointer;
+      opacity: 0.6;
+    }
+    #admin-login-btn:hover { opacity: 1; background: rgba(0,0,0,0.05); }
+
+    #file-input { display: none; }
+
+    /* ── Chat area ── */
+    #chat-container {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .message {
+      display: flex;
+      flex-direction: column;
+      max-width: 78%;
+    }
+    .message.user { align-self: flex-end; align-items: flex-end; }
+    .message.bot  { align-self: flex-start; align-items: flex-start; }
+
+    .bubble {
+      padding: 12px 16px;
+      border: var(--border);
+      border-radius: 8px;
+      font-size: 14px;
+      line-height: 1.65;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .message.user .bubble { background: var(--yellow); box-shadow: 3px 3px 0 var(--black); }
+    .message.bot  .bubble { background: var(--white);  box-shadow: 3px 3px 0 var(--black); }
+
+    .meta-row {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-top: 6px;
+    }
+
+    .sources {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+    .source-tag {
+      font-family: 'Space Mono', monospace;
+      font-size: 10px;
+      padding: 2px 8px;
+      background: var(--gray);
+      border: 1px solid #ccc;
+      border-radius: 100px;
+      color: #555;
+    }
+
+    .rewrite-hint {
+      font-family: 'Space Mono', monospace;
+      font-size: 10px;
+      color: #999;
+      padding: 2px 0;
+    }
+
+    /* Typing indicator */
+    .typing {
+      display: flex; gap: 4px; align-items: center;
+      padding: 14px 18px;
+    }
+    .typing span {
+      width: 7px; height: 7px;
+      background: #aaa; border-radius: 50%;
+      animation: bounce 1.2s infinite;
+    }
+    .typing span:nth-child(2) { animation-delay: .2s; }
+    .typing span:nth-child(3) { animation-delay: .4s; }
+    @keyframes bounce {
+      0%,80%,100% { transform: translateY(0); }
+      40%         { transform: translateY(-6px); }
+    }
+
+    /* Markdown styling inside bubbles */
+    .bubble h1, .bubble h2, .bubble h3 { margin: 8px 0; font-size: 1.1em; }
+    .bubble p { margin-bottom: 8px; }
+    .bubble p:last-child { margin-bottom: 0; }
+    .bubble ul, .bubble ol { margin-left: 20px; margin-bottom: 8px; }
+    .bubble li { margin-bottom: 4px; }
+    .bubble code { font-family: 'Space Mono', monospace; background: rgba(0,0,0,0.05); padding: 2px 4px; border-radius: 3px; font-size: 0.9em; }
+    .bubble pre { background: #f8f8f8; padding: 10px; border-radius: 6px; overflow-x: auto; margin: 8px 0; border: 1px solid #ddd; }
+
+    /* ── Input bar ── */
+    #input-bar {
+      background: var(--white);
+      border-top: var(--border);
+      padding: 14px 20px;
+      display: flex;
+      gap: 10px;
+      flex-shrink: 0;
+      align-items: center;
+    }
+
+    #dept-filter {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 10px 10px;
+      border: var(--border);
+      border-radius: 6px;
+      background: var(--gray);
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
+    #question-input {
+      flex: 1;
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 14px;
+      padding: 10px 14px;
+      border: var(--border);
+      border-radius: 6px;
+      outline: none;
+      resize: none;
+      height: 44px;
+    }
+    #question-input:focus { box-shadow: 3px 3px 0 var(--black); }
+
+    #send-btn {
+      background: var(--black);
+      color: var(--yellow);
+      font-size: 20px;
+      padding: 0 18px;
+      height: 44px;
+      border: var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      box-shadow: 3px 3px 0 #555;
+      flex-shrink: 0;
+    }
+    #send-btn:hover { box-shadow: 4px 4px 0 #555; transform: translate(-1px,-1px); }
+
+    /* ── Welcome ── */
+    #welcome {
+      text-align: center;
+      color: #999;
+      margin-top: 40px;
+      font-size: 14px;
+      line-height: 2;
+    }
+    #welcome .icon { font-size: 40px; display: block; margin-bottom: 8px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>🏢 Chatbot Nội bộ</h1>
+  <div style="display: flex; align-items: center; gap: 8px;">
+    <span id="stats-badge" class="admin-only">Đang tải...</span>
+    <button id="admin-login-btn" onclick="toggleAdmin()">Admin</button>
+  </div>
+</header>
+
+<!-- Toolbar: Upload + Ingest -->
+<div id="toolbar" class="admin-only admin-flex">
+  <span class="toolbar-label">📎 Upload PDF:</span>
+  <select id="dept-upload" title="Phòng ban của tài liệu">
+    <option value="General">General</option>
+  </select>
+  <input type="file" id="file-input" accept=".pdf" multiple />
+  <button class="btn" onclick="document.getElementById('file-input').click()">Chọn file</button>
+  <button class="btn secondary" onclick="ingestAll()">🔄 Index lại tất cả</button>
+  <button class="btn secondary" style="background: #ffcdd2;" onclick="resetDB()">🗑️ Xóa trắng DB</button>
+  <span id="status-msg"></span>
+</div>
+
+<!-- Admin Panel -->
+<div id="admin-panel" class="admin-only">
+  <div id="admin-tabs">
+    <button class="tab-btn" data-tab="dashboard" onclick="switchAdminTab('dashboard')">Dashboard</button>
+    <button class="tab-btn" data-tab="conversations" onclick="switchAdminTab('conversations')">Conversations</button>
+    <button class="tab-btn" data-tab="negative" onclick="switchAdminTab('negative')">Negative Feedback</button>
+    <button class="tab-btn" data-tab="documents" onclick="switchAdminTab('documents')">Documents</button>
+    <button class="tab-btn" data-tab="notifications" onclick="switchAdminTab('notifications')">Notifications</button>
+  </div>
+
+  <div id="tab-dashboard" class="tab-content">
+    <div class="admin-grid">
+      <div class="card">
+        <h3>Quick Stats</h3>
+        <div id="dash-stats">Loading…</div>
+      </div>
+      <div class="card">
+        <h3>Actions</h3>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="btn secondary" onclick="switchAdminTab('documents')">Manage Documents</button>
+          <button class="btn secondary" onclick="switchAdminTab('conversations')">View Conversations</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="tab-conversations" class="tab-content">
+    <div class="filters">
+      <input id="sess-filter-name" placeholder="Filter user name…" />
+      <select id="sess-filter-status" title="Status">
+        <option value="all">All</option>
+        <option value="active">Active</option>
+        <option value="ended">Ended</option>
+      </select>
+      <button class="btn secondary" onclick="loadAdminSessions(1)">Search</button>
+    </div>
+    <div class="card">
+      <h3>Sessions</h3>
+      <div id="sessions-table">Loading…</div>
+      <div class="pager">
+        <button class="btn secondary" onclick="prevSessions()">Prev</button>
+        <span id="sessions-page">Page 1</span>
+        <button class="btn secondary" onclick="nextSessions()">Next</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="tab-negative" class="tab-content">
+    <div class="filters">
+      <select id="neg-threshold" title="Threshold">
+        <option value="-1">👎 Only (default)</option>
+      </select>
+      <input id="neg-filter-name" placeholder="Filter user name…" />
+      <input id="neg-filter-session" placeholder="Filter session_id…" />
+      <button class="btn secondary" onclick="loadNegativeFeedback(1)">Search</button>
+    </div>
+    <div class="card">
+      <h3>Negative Feedback</h3>
+      <div id="negative-table">Loading…</div>
+      <div class="pager">
+        <button class="btn secondary" onclick="prevNegative()">Prev</button>
+        <span id="negative-page">Page 1</span>
+        <button class="btn secondary" onclick="nextNegative()">Next</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="tab-documents" class="tab-content">
+    <div class="filters">
+      <input id="crawl-url" placeholder="Crawl URL (https://...)" style="flex:1; min-width:260px;" />
+      <button class="btn secondary" onclick="crawlUrl()">Crawl + Index</button>
+      <input id="doc-filter-filename" placeholder="Filter filename…" />
+      <select id="doc-filter-active" title="Active">
+        <option value="">All</option>
+        <option value="1">Active</option>
+        <option value="0">Inactive</option>
+      </select>
+      <button class="btn secondary" onclick="loadDocuments(1)">Search</button>
+    </div>
+    <div class="card">
+      <h3>Documents</h3>
+      <div id="documents-table">Loading…</div>
+      <div class="pager">
+        <button class="btn secondary" onclick="prevDocuments()">Prev</button>
+        <span id="documents-page">Page 1</span>
+        <button class="btn secondary" onclick="nextDocuments()">Next</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="tab-notifications" class="tab-content">
+    <div class="filters">
+      <button class="btn secondary" onclick="sendTestEmail()">Send Test Email</button>
+      <select id="email-filter-status" title="Status">
+        <option value="">All</option>
+        <option value="sent">Sent</option>
+        <option value="failed">Failed</option>
+      </select>
+      <select id="email-filter-kind" title="Kind">
+        <option value="">All</option>
+        <option value="negative_feedback">negative_feedback</option>
+        <option value="test_email">test_email</option>
+      </select>
+      <button class="btn secondary" onclick="loadEmailLogs(1)">Refresh</button>
+    </div>
+    <div class="card">
+      <h3>Email Logs</h3>
+      <div id="emails-table">Loading…</div>
+      <div class="pager">
+        <button class="btn secondary" onclick="prevEmails()">Prev</button>
+        <span id="emails-page">Page 1</span>
+        <button class="btn secondary" onclick="nextEmails()">Next</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="modal" onclick="closeModal(event)">
+  <div class="modal-content" onclick="event.stopPropagation()">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:10px;">
+      <strong id="modal-title">Detail</strong>
+      <button class="btn secondary" onclick="closeModal()">Close</button>
+    </div>
+    <div id="modal-body"></div>
+  </div>
+</div>
+
+<!-- Chat messages -->
+<div id="chat-container">
+  <div id="welcome">
+    <span class="icon">💬</span>
+    Xin chào! Tôi là trợ lý nội bộ.<br>
+    Hãy đặt câu hỏi về quy định, quy trình hoặc chính sách của công ty.
+  </div>
+</div>
+
+<!-- Input bar with department filter -->
+<div id="input-bar">
+  <select id="dept-filter" title="Lọc theo phòng ban">
+    <option value="all">🏢 Tất cả</option>
+  </select>
+  <textarea id="question-input" placeholder="Nhập câu hỏi... (Enter để gửi, Shift+Enter xuống dòng)"></textarea>
+  <button id="send-btn" onclick="sendQuestion()">➤</button>
+</div>
+
+  <script>
+    const API = '';
+    let ADMIN_TOKEN = localStorage.getItem('admin_token') || "";
+    let USER_NAME = localStorage.getItem('user_name') || "";
+    let SESSION_ID = localStorage.getItem('session_id') || "";
+
+    if (ADMIN_TOKEN) {
+      document.body.classList.add('admin-mode');
+      document.getElementById('admin-login-btn').textContent = 'Logout';
+      switchAdminTab(ADMIN_TAB).catch(() => {});
+    }
+
+    async function toggleAdmin() {
+      if (ADMIN_TOKEN) {
+        ADMIN_TOKEN = "";
+        localStorage.removeItem('admin_token');
+        document.body.classList.remove('admin-mode');
+        document.getElementById('admin-login-btn').textContent = 'Admin';
+        location.reload(); 
+      } else {
+        const username = prompt("Admin username:");
+        if (!username) return;
+        const password = prompt("Admin password:");
+        if (!password) return;
+
+        const res = await fetch(`${API}/api/admin/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password })
+        });
+
+        if (res.status === 401) {
+          alert("Sai tài khoản hoặc mật khẩu.");
+          return;
+        }
+        if (!res.ok) {
+          alert(`Lỗi đăng nhập (${res.status})`);
+          return;
+        }
+
+        const data = await res.json();
+        ADMIN_TOKEN = data.token || "";
+        if (!ADMIN_TOKEN) {
+          alert("Không nhận được token.");
+          return;
+        }
+        localStorage.setItem('admin_token', ADMIN_TOKEN);
+        document.body.classList.add('admin-mode');
+        document.getElementById('admin-login-btn').textContent = 'Logout';
+        loadStats();
+        switchAdminTab(ADMIN_TAB).catch(() => {});
+      }
+    }
+
+    async function adminFetch(url, options = {}) {
+      if (!options.headers) options.headers = {};
+      options.headers['Authorization'] = `Bearer ${ADMIN_TOKEN}`;
+      const res = await fetch(url, options);
+      if (res.status === 401) {
+        alert("Hết phiên admin hoặc token không hợp lệ. Vui lòng đăng nhập lại.");
+        ADMIN_TOKEN = "";
+        localStorage.removeItem('admin_token');
+        location.reload();
+      }
+      return res;
+    }
+
+    let ADMIN_TAB = localStorage.getItem('admin_tab') || "dashboard";
+    let SESS_PAGE = 1, SESS_PAGE_SIZE = 20, SESS_TOTAL = 0;
+    let NEG_PAGE = 1, NEG_PAGE_SIZE = 20, NEG_TOTAL = 0;
+    let DOC_PAGE = 1, DOC_PAGE_SIZE = 20, DOC_TOTAL = 0;
+    let EMAIL_PAGE = 1, EMAIL_PAGE_SIZE = 20, EMAIL_TOTAL = 0;
+
+    function escapeHtml(s) {
+      return String(s ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    function openModal(title, html) {
+      document.getElementById('modal-title').textContent = title || 'Detail';
+      document.getElementById('modal-body').innerHTML = html || '';
+      document.getElementById('modal').classList.add('show');
+    }
+
+    function closeModal() {
+      document.getElementById('modal').classList.remove('show');
+      document.getElementById('modal-body').innerHTML = '';
+    }
+
+    async function switchAdminTab(tab) {
+      ADMIN_TAB = tab || "dashboard";
+      localStorage.setItem('admin_tab', ADMIN_TAB);
+
+      document.querySelectorAll('.tab-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.tab === ADMIN_TAB);
+      });
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+
+      const pane = document.getElementById(`tab-${ADMIN_TAB}`);
+      if (pane) pane.classList.add('active');
+
+      if (!ADMIN_TOKEN) return;
+
+      if (ADMIN_TAB === 'dashboard') await loadDashboard();
+      if (ADMIN_TAB === 'conversations') await loadAdminSessions(1);
+      if (ADMIN_TAB === 'negative') await loadNegativeFeedback(1);
+      if (ADMIN_TAB === 'documents') await loadDocuments(1);
+      if (ADMIN_TAB === 'notifications') await loadEmailLogs(1);
+    }
+
+    async function loadDashboard() {
+      const el = document.getElementById('dash-stats');
+      if (!el) return;
+      el.textContent = "Loading…";
+      try {
+        const res = await adminFetch(`${API}/api/admin/stats`);
+        const data = await res.json();
+        el.innerHTML = `
+          <div><strong>Files</strong>: ${escapeHtml(data.total_files)}</div>
+          <div><strong>Chunks</strong>: ${escapeHtml(data.total_chunks)}</div>
+          <div><strong>Departments</strong>: ${escapeHtml((data.departments || []).length)}</div>
+        `;
+      } catch (e) {
+        el.textContent = "Offline";
+      }
+    }
+
+    function _setPager(id, page, pageSize, total) {
+      const span = document.getElementById(id);
+      if (!span) return;
+      const maxPage = Math.max(1, Math.ceil((total || 0) / pageSize));
+      span.textContent = `Page ${page} / ${maxPage} · Total ${total || 0}`;
+    }
+
+    async function loadAdminSessions(page = 1) {
+      SESS_PAGE = page;
+      const userName = document.getElementById('sess-filter-name')?.value?.trim() || "";
+      const status = document.getElementById('sess-filter-status')?.value || "all";
+
+      const qs = new URLSearchParams({ page: String(SESS_PAGE), page_size: String(SESS_PAGE_SIZE), status });
+      if (userName) qs.set('user_name', userName);
+
+      const holder = document.getElementById('sessions-table');
+      if (holder) holder.textContent = "Loading…";
+
+      const res = await adminFetch(`${API}/api/admin/sessions?${qs.toString()}`);
+      const data = await res.json();
+      SESS_TOTAL = data.total || 0;
+      _setPager('sessions-page', SESS_PAGE, SESS_PAGE_SIZE, SESS_TOTAL);
+
+      const items = data.items || [];
+      if (!holder) return;
+      if (!items.length) {
+        holder.innerHTML = "<div>No sessions.</div>";
+        return;
+      }
+
+      holder.innerHTML = `
+        <table class="table">
+          <thead><tr><th>User</th><th>Lang</th><th>Created</th><th>Ended</th><th>ID</th></tr></thead>
+          <tbody>
+            ${items.map(s => `
+              <tr style="cursor:pointer" onclick="openSessionDetail('${escapeHtml(s.id)}')">
+                <td>${escapeHtml(s.user_name)}</td>
+                <td>${escapeHtml(s.user_lang)}</td>
+                <td>${escapeHtml(s.created_at)}</td>
+                <td>${escapeHtml(s.ended_at || '')}</td>
+                <td><code>${escapeHtml(s.id)}</code></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+
+    function prevSessions() {
+      if (SESS_PAGE <= 1) return;
+      loadAdminSessions(SESS_PAGE - 1);
+    }
+
+    function nextSessions() {
+      if (SESS_PAGE * SESS_PAGE_SIZE >= SESS_TOTAL) return;
+      loadAdminSessions(SESS_PAGE + 1);
+    }
+
+    async function openSessionDetail(id) {
+      const res = await adminFetch(`${API}/api/admin/sessions/${encodeURIComponent(id)}`);
+      if (!res.ok) {
+        openModal("Session", `<div>Error (${res.status})</div>`);
+        return;
+      }
+      const data = await res.json();
+      const msgs = data.messages || [];
+      const fb = data.feedback || [];
+      openModal(
+        "Session Detail",
+        `
+          <div class="card" style="box-shadow:none; margin-bottom:10px;">
+            <div><strong>User</strong>: ${escapeHtml(data.user_name)} (${escapeHtml(data.user_lang)})</div>
+            <div><strong>Created</strong>: ${escapeHtml(data.created_at)} · <strong>Ended</strong>: ${escapeHtml(data.ended_at || '')}</div>
+            <div><strong>Session</strong>: <code>${escapeHtml(data.id)}</code></div>
+          </div>
+          <div class="card" style="box-shadow:none; margin-bottom:10px;">
+            <h3>Messages (${msgs.length})</h3>
+            <pre>${escapeHtml(msgs.map(m => `${m.role}: ${m.content}`).join('\\n\\n'))}</pre>
+          </div>
+          <div class="card" style="box-shadow:none;">
+            <h3>Feedback (${fb.length})</h3>
+            <pre>${escapeHtml(fb.map(f => `rating=${f.rating} message_id=${f.message_id} reason=${f.reason || ''}`).join('\\n'))}</pre>
+          </div>
+        `
+      );
+    }
+
+    async function loadNegativeFeedback(page = 1) {
+      NEG_PAGE = page;
+      const threshold = document.getElementById('neg-threshold')?.value || "2";
+      const userName = document.getElementById('neg-filter-name')?.value?.trim() || "";
+      const sessionId = document.getElementById('neg-filter-session')?.value?.trim() || "";
+
+      const qs = new URLSearchParams({ page: String(NEG_PAGE), page_size: String(NEG_PAGE_SIZE), threshold });
+      if (userName) qs.set('user_name', userName);
+      if (sessionId) qs.set('session_id', sessionId);
+
+      const holder = document.getElementById('negative-table');
+      if (holder) holder.textContent = "Loading…";
+
+      const res = await adminFetch(`${API}/api/admin/feedback/negative?${qs.toString()}`);
+      const data = await res.json();
+      NEG_TOTAL = data.total || 0;
+      _setPager('negative-page', NEG_PAGE, NEG_PAGE_SIZE, NEG_TOTAL);
+
+      const items = data.items || [];
+      if (!holder) return;
+      if (!items.length) {
+        holder.innerHTML = "<div>No negative feedback.</div>";
+        return;
+      }
+
+      holder.innerHTML = `
+        <table class="table">
+          <thead><tr><th>Rating</th><th>User</th><th>Reason</th><th>Session</th><th>Message</th><th>At</th></tr></thead>
+          <tbody>
+            ${items.map(f => `
+              <tr>
+                <td>${escapeHtml(f.rating)}</td>
+                <td>${escapeHtml(f.user_name)} (${escapeHtml(f.user_lang)})</td>
+                <td>${escapeHtml(f.reason || '')}</td>
+                <td><code>${escapeHtml(f.session_id)}</code></td>
+                <td>${escapeHtml((f.message_content || '').slice(0, 160))}</td>
+                <td>${escapeHtml(f.created_at)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+
+    function prevNegative() {
+      if (NEG_PAGE <= 1) return;
+      loadNegativeFeedback(NEG_PAGE - 1);
+    }
+
+    function nextNegative() {
+      if (NEG_PAGE * NEG_PAGE_SIZE >= NEG_TOTAL) return;
+      loadNegativeFeedback(NEG_PAGE + 1);
+    }
+
+    async function loadDocuments(page = 1) {
+      DOC_PAGE = page;
+      const fname = document.getElementById('doc-filter-filename')?.value?.trim() || "";
+      const active = document.getElementById('doc-filter-active')?.value || "";
+
+      const qs = new URLSearchParams({ page: String(DOC_PAGE), page_size: String(DOC_PAGE_SIZE) });
+      if (fname) qs.set('filename', fname);
+      if (active !== "") qs.set('active', active);
+
+      const holder = document.getElementById('documents-table');
+      if (holder) holder.textContent = "Loading…";
+
+      const res = await adminFetch(`${API}/api/admin/documents?${qs.toString()}`);
+      const data = await res.json();
+      DOC_TOTAL = data.total || 0;
+      _setPager('documents-page', DOC_PAGE, DOC_PAGE_SIZE, DOC_TOTAL);
+
+      const items = data.items || [];
+      if (!holder) return;
+      if (!items.length) {
+        holder.innerHTML = "<div>No documents.</div>";
+        return;
+      }
+
+      holder.innerHTML = `
+        <table class="table">
+          <thead><tr><th>Filename</th><th>Dept</th><th>Category</th><th>Version</th><th>Active</th><th>Chunks</th><th>Uploaded</th></tr></thead>
+          <tbody>
+            ${items.map(d => `
+              <tr style="cursor:pointer" onclick="openDocumentDetail(${d.id})">
+                <td>${escapeHtml(d.filename)}</td>
+                <td>${escapeHtml(d.department)}</td>
+                <td>${escapeHtml(d.category)}</td>
+                <td>${escapeHtml(d.version)}</td>
+                <td>${d.is_active ? '✅' : '—'}</td>
+                <td>${escapeHtml(d.chunk_count)}</td>
+                <td>${escapeHtml(d.uploaded_at)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+
+    function prevDocuments() {
+      if (DOC_PAGE <= 1) return;
+      loadDocuments(DOC_PAGE - 1);
+    }
+
+    function nextDocuments() {
+      if (DOC_PAGE * DOC_PAGE_SIZE >= DOC_TOTAL) return;
+      loadDocuments(DOC_PAGE + 1);
+    }
+
+    async function openDocumentDetail(id) {
+      const res = await adminFetch(`${API}/api/admin/documents/${id}`);
+      if (!res.ok) {
+        openModal("Document", `<div>Error (${res.status})</div>`);
+        return;
+      }
+      const d = await res.json();
+      const versions = d.versions || [];
+      openModal(
+        "Document Detail",
+        `
+          <div class="card" style="box-shadow:none; margin-bottom:10px;">
+            <div><strong>Filename</strong>: ${escapeHtml(d.filename)}</div>
+            <div><strong>Dept</strong>: ${escapeHtml(d.department)} · <strong>Category</strong>: ${escapeHtml(d.category)}</div>
+            <div><strong>Active</strong>: ${d.is_active ? 'Yes' : 'No'} · <strong>Version</strong>: ${escapeHtml(d.version)}</div>
+            <div><strong>Path</strong>: <code>${escapeHtml(d.file_path)}</code></div>
+          </div>
+          <div class="card" style="box-shadow:none;">
+            <h3>Versions (max 5)</h3>
+            <pre>${escapeHtml(versions.map(v => `v${v.version} ${v.is_active ? '[active]' : ''} chunks=${v.chunk_count} path=${v.file_path}`).join('\\n'))}</pre>
+          </div>
+        `
+      );
+    }
+
+    async function crawlUrl() {
+      const url = document.getElementById('crawl-url')?.value?.trim();
+      if (!url) return;
+      const status = document.getElementById('status-msg');
+      if (status) status.textContent = `⏳ Crawling ${url}...`;
+      try {
+        const res = await adminFetch(`${API}/api/admin/crawl`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+        if (status) status.textContent = `✅ Crawled + indexed: ${data.file} (v${data.version}, ${data.chunks} chunks)`;
+        loadDocuments(1);
+        loadStats();
+      } catch (e) {
+        if (status) status.textContent = `❌ Crawl failed: ${e.message || e}`;
+      }
+    }
+
+    async function sendTestEmail() {
+      const status = document.getElementById('status-msg');
+      if (status) status.textContent = `⏳ Sending test email...`;
+      try {
+        const res = await adminFetch(`${API}/api/admin/notifications/test-email`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+        if (status) status.textContent = `✅ Test email sent`;
+        loadEmailLogs(1);
+      } catch (e) {
+        if (status) status.textContent = `❌ Test email failed: ${e.message || e}`;
+      }
+    }
+
+    async function loadEmailLogs(page = 1) {
+      EMAIL_PAGE = page;
+      const status = document.getElementById('email-filter-status')?.value || "";
+      const kind = document.getElementById('email-filter-kind')?.value || "";
+
+      const qs = new URLSearchParams({ page: String(EMAIL_PAGE), page_size: String(EMAIL_PAGE_SIZE) });
+      if (status) qs.set('status', status);
+      if (kind) qs.set('kind', kind);
+
+      const holder = document.getElementById('emails-table');
+      if (holder) holder.textContent = "Loading…";
+
+      const res = await adminFetch(`${API}/api/admin/notifications/emails?${qs.toString()}`);
+      const data = await res.json();
+      EMAIL_TOTAL = data.total || 0;
+      _setPager('emails-page', EMAIL_PAGE, EMAIL_PAGE_SIZE, EMAIL_TOTAL);
+
+      const items = data.items || [];
+      if (!holder) return;
+      if (!items.length) {
+        holder.innerHTML = "<div>No email logs.</div>";
+        return;
+      }
+
+      holder.innerHTML = `
+        <table class="table">
+          <thead><tr><th>ID</th><th>Kind</th><th>Status</th><th>To</th><th>Subject</th><th>Error</th><th>At</th></tr></thead>
+          <tbody>
+            ${items.map(e => `
+              <tr>
+                <td>${escapeHtml(e.id)}</td>
+                <td>${escapeHtml(e.kind)}</td>
+                <td>${escapeHtml(e.status)}</td>
+                <td>${escapeHtml((e.to_emails || []).join(', '))}</td>
+                <td>${escapeHtml(e.subject)}</td>
+                <td>${escapeHtml((e.error || '').slice(0, 160))}</td>
+                <td>${escapeHtml(e.created_at)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+
+    function prevEmails() {
+      if (EMAIL_PAGE <= 1) return;
+      loadEmailLogs(EMAIL_PAGE - 1);
+    }
+
+    function nextEmails() {
+      if (EMAIL_PAGE * EMAIL_PAGE_SIZE >= EMAIL_TOTAL) return;
+      loadEmailLogs(EMAIL_PAGE + 1);
+    }
+
+    // ── Stats & departments ──────────────────────────────────────────────────
+    async function loadStats() {
+      if (!ADMIN_TOKEN) return;
+      try {
+        const res  = await adminFetch(`${API}/api/admin/stats`);
+        const data = await res.json();
+        document.getElementById('stats-badge').textContent =
+          `${data.total_files} file · ${data.total_chunks} chunks`;
+        updateDeptSelects(data.departments || []);
+    } catch {
+      document.getElementById('stats-badge').textContent = 'Offline';
+    }
+  }
+
+  function updateDeptSelects(depts) {
+    const uploadSel = document.getElementById('dept-upload');
+    const filterSel = document.getElementById('dept-filter');
+    const uploadVal = uploadSel.value;
+    const filterVal = filterSel.value;
+
+    // Fixed options for upload select
+    const allDepts = ['General', 'HR', 'IT', 'Finance', 'Operations', 'Marketing', ...depts];
+    const uniqueDepts = [...new Set(allDepts)].sort();
+
+    uploadSel.innerHTML = uniqueDepts.map(d =>
+      `<option value="${d}" ${d === uploadVal ? 'selected' : ''}>${d}</option>`
+    ).join('');
+
+    // Filter select: "all" + departments that have docs
+    filterSel.innerHTML = `<option value="all">🏢 Tất cả</option>` +
+      depts.map(d => `<option value="${d}" ${d === filterVal ? 'selected' : ''}>📁 ${d}</option>`).join('');
+  }
+
+  // ── Upload ───────────────────────────────────────────────────────────────
+  document.getElementById('file-input').addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files);
+    if (!files.length) return;
+    const status = document.getElementById('status-msg');
+    const dept   = document.getElementById('dept-upload').value;
+
+    for (const file of files) {
+      status.textContent = `⏳ Uploading ${file.name} → [${dept}]...`;
+      const formData = new FormData();
+      formData.append('file', file);
+      try {
+        const res  = await adminFetch(`${API}/api/admin/upload?department=${encodeURIComponent(dept)}`, {
+          method: 'POST', body: formData
+        });
+        const data = await res.json();
+        status.textContent = `✅ ${data.message}`;
+      } catch (err) {
+        status.textContent = `❌ Lỗi: ${err.message}`;
+      }
+    }
+    e.target.value = '';
+    loadStats();
+  });
+
+  async function ingestAll() {
+    const status = document.getElementById('status-msg');
+    status.textContent = '⏳ Đang index lại toàn bộ tài liệu...';
+    try {
+      const res  = await adminFetch(`${API}/api/admin/ingest-all`, { method: 'POST' });
+      const data = await res.json();
+      status.textContent = `✅ ${data.message}`;
+      loadStats();
+    } catch (err) {
+      status.textContent = `❌ ${err.message}`;
+    }
+  }
+
+  async function resetDB() {
+    if (!confirm('Bạn có chắc chắn muốn xóa sạch database?')) return;
+    const status = document.getElementById('status-msg');
+    status.textContent = '⏳ Đang xóa database...';
+    try {
+      const res  = await adminFetch(`${API}/api/admin/reset`, { method: 'POST' });
+      const data = await res.json();
+      status.textContent = `✅ ${data.message}`;
+      loadStats();
+    } catch (err) {
+      status.textContent = `❌ ${err.message}`;
+    }
+  }
+
+  // ── Chat ─────────────────────────────────────────────────────────────────
+  const chatContainer = document.getElementById('chat-container');
+  const inputEl       = document.getElementById('question-input');
+
+  async function ensureSession() {
+    if (!USER_NAME) {
+      USER_NAME = prompt("Nhập tên của bạn:");
+      if (!USER_NAME) USER_NAME = "Guest";
+      USER_NAME = USER_NAME.trim() || "Guest";
+      localStorage.setItem('user_name', USER_NAME);
+    }
+
+    if (SESSION_ID) return SESSION_ID;
+
+    const res = await fetch(`${API}/api/session/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_name: USER_NAME, user_lang: 'vi' })
+    });
+    if (!res.ok) throw new Error(`Không thể tạo phiên làm việc (${res.status})`);
+    const data = await res.json();
+    SESSION_ID = data.session_id;
+    localStorage.setItem('session_id', SESSION_ID);
+    return SESSION_ID;
+  }
+
+  function removeWelcome() {
+    document.getElementById('welcome')?.remove();
+  }
+
+  function addMessage(role, text, sources = [], rewritten = '') {
+    removeWelcome();
+    const div    = document.createElement('div');
+    div.className = `message ${role}`;
+
+    const bubble  = document.createElement('div');
+    bubble.className = 'bubble';
+    if (role === 'bot') {
+      bubble.innerHTML = marked.parse(text);
+    } else {
+      bubble.textContent = text;
+    }
+    div.appendChild(bubble);
+
+    if (role === 'bot') {
+      const meta = document.createElement('div');
+      meta.className = 'meta-row';
+
+      if (rewritten && rewritten !== text) {
+        const hint = document.createElement('div');
+        hint.className = 'rewrite-hint';
+        hint.textContent = `🔍 Đã tìm: "${rewritten}"`;
+        meta.appendChild(hint);
+      }
+
+      if (sources.length) {
+        const srcRow = document.createElement('div');
+        srcRow.className = 'sources';
+        sources.forEach(s => {
+          const tag = document.createElement('span');
+          tag.className = 'source-tag';
+          tag.textContent = '📄 ' + s;
+          srcRow.appendChild(tag);
+        });
+        meta.appendChild(srcRow);
+      }
+
+      div.appendChild(meta);
+    }
+
+    chatContainer.appendChild(div);
+    chatContainer.scrollTop = chatContainer.scrollHeight;
+  }
+
+  function addTyping() {
+    removeWelcome();
+    const div = document.createElement('div');
+    div.className = 'message bot';
+    div.id = 'typing-indicator';
+    div.innerHTML = `<div class="bubble typing"><span></span><span></span><span></span></div>`;
+    chatContainer.appendChild(div);
+    chatContainer.scrollTop = chatContainer.scrollHeight;
+  }
+
+  function removeTyping() {
+    document.getElementById('typing-indicator')?.remove();
+  }
+
+  async function sendQuestion() {
+    const q    = inputEl.value.trim();
+    const dept = document.getElementById('dept-filter').value;
+    if (!q) return;
+
+    inputEl.value = '';
+    addMessage('user', q);
+    addTyping();
+
+    try {
+      await ensureSession();
+      const res  = await fetch(`${API}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: q, department: dept, session_id: SESSION_ID })
+      });
+      if (res.status === 404) {
+        localStorage.removeItem('session_id');
+        SESSION_ID = "";
+        removeTyping();
+        addMessage('bot', '⚠️ Phiên làm việc không tồn tại. Vui lòng gửi lại câu hỏi.');
+        return;
+      }
+      const data = await res.json();
+      removeTyping();
+      addMessage('bot', data.answer, data.sources || [], data.rewritten_query || '');
+    } catch (err) {
+      removeTyping();
+      addMessage('bot', `❌ Lỗi kết nối: ${err.message}`);
+    }
+  }
+
+  inputEl.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendQuestion(); }
+  });
+
+  // ── Init ─────────────────────────────────────────────────────────────────
+  ensureSession().catch(() => {});
+  loadStats();
+  setInterval(loadStats, 30000);
+</script>
+</body>
+</html>
