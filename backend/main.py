@@ -11,6 +11,7 @@ from pydantic import BaseModel
 import httpx
 from db import collection
 from admin_auth import create_admin_token, verify_admin_token
+from emailer import get_notify_emails, send_email
 from database import (
     add_message,
     create_document_version,
@@ -32,6 +33,8 @@ from database import (
     set_document_chunk_count,
     update_document_file_path,
     upsert_feedback,
+    log_email,
+    list_email_logs,
     session_exists,
     verify_admin_credentials,
 )
@@ -122,6 +125,12 @@ class CrawlRequest(BaseModel):
     department: str = "General"
     category: str = "general"
     filename: str | None = None
+
+
+class AdminTestEmailRequest(BaseModel):
+    to_emails: list[str] | None = None
+    subject: str = "Internal Chatbot: test email"
+    body: str = "This is a test email from Internal Chatbot."
 
 
 @app.get("/api/health")
@@ -252,6 +261,34 @@ def admin_get_document(document_id: int):
     return doc
 
 
+@app.get("/api/admin/notifications/emails")
+def admin_list_email_logs(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    kind: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+):
+    return list_email_logs(page=page, page_size=page_size, kind=kind, status=status)
+
+
+@app.post("/api/admin/notifications/test-email")
+def admin_test_email(req: AdminTestEmailRequest, request: Request):
+    to_emails = req.to_emails or get_notify_emails()
+    if not to_emails:
+        raise HTTPException(400, "No recipients configured (NOTIFY_EMAILS)")
+
+    subject = req.subject
+    body = req.body + f"\n\nSent by: {getattr(request.state, 'admin_user', None) or 'admin'}"
+    try:
+        send_email(to_emails, subject=subject, body=body)
+        entry = log_email("test_email", to_emails, subject, body, status="sent")
+    except Exception as e:
+        entry = log_email("test_email", to_emails, subject, body, status="failed", error=str(e))
+        raise HTTPException(500, f"Failed to send email: {e}")
+
+    return {"status": "ok", "log": entry}
+
+
 def _stats_payload() -> dict:
     pdf_files = []
     for root, _, files in os.walk(DOCS_DIR):
@@ -345,6 +382,21 @@ def submit_feedback(req: FeedbackRequest):
         raise HTTPException(404, "Message not found")
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+    if req.rating == -1:
+        to_emails = get_notify_emails()
+        if to_emails:
+            subject = f"[Internal Chatbot] Negative feedback (session {req.session_id})"
+            body = (
+                f"Session: {req.session_id}\n"
+                f"Message ID: {req.message_id}\n"
+                f"Reason: {req.reason or ''}\n"
+            )
+            try:
+                send_email(to_emails, subject=subject, body=body)
+                log_email("negative_feedback", to_emails, subject, body, status="sent")
+            except Exception as e:
+                log_email("negative_feedback", to_emails, subject, body, status="failed", error=str(e))
     return {"status": "ok", "feedback": fb}
 
 
@@ -377,8 +429,12 @@ async def admin_upload(
 
 
 async def _handle_upload(request: Request, file: UploadFile, department: str, category: str, uploaded_by: str = "admin"):
-    if not (file.filename.lower().endswith(".pdf") or file.filename.lower().endswith(".docx")):
-        raise HTTPException(400, "Chỉ hỗ trợ file PDF hoặc DOCX")
+    if not (
+        file.filename.lower().endswith(".pdf")
+        or file.filename.lower().endswith(".doc")
+        or file.filename.lower().endswith(".docx")
+    ):
+        raise HTTPException(400, "Chỉ hỗ trợ file PDF/DOC/DOCX")
 
     dest_dir = os.path.join(DOCS_DIR, department)
     os.makedirs(dest_dir, exist_ok=True)

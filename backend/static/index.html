@@ -504,9 +504,28 @@
   </div>
 
   <div id="tab-notifications" class="tab-content">
+    <div class="filters">
+      <button class="btn secondary" onclick="sendTestEmail()">Send Test Email</button>
+      <select id="email-filter-status" title="Status">
+        <option value="">All</option>
+        <option value="sent">Sent</option>
+        <option value="failed">Failed</option>
+      </select>
+      <select id="email-filter-kind" title="Kind">
+        <option value="">All</option>
+        <option value="negative_feedback">negative_feedback</option>
+        <option value="test_email">test_email</option>
+      </select>
+      <button class="btn secondary" onclick="loadEmailLogs(1)">Refresh</button>
+    </div>
     <div class="card">
-      <h3>Notifications</h3>
-      <div>Coming soon.</div>
+      <h3>Email Logs</h3>
+      <div id="emails-table">Loading…</div>
+      <div class="pager">
+        <button class="btn secondary" onclick="prevEmails()">Prev</button>
+        <span id="emails-page">Page 1</span>
+        <button class="btn secondary" onclick="nextEmails()">Next</button>
+      </div>
     </div>
   </div>
 </div>
@@ -610,6 +629,7 @@
     let SESS_PAGE = 1, SESS_PAGE_SIZE = 20, SESS_TOTAL = 0;
     let NEG_PAGE = 1, NEG_PAGE_SIZE = 20, NEG_TOTAL = 0;
     let DOC_PAGE = 1, DOC_PAGE_SIZE = 20, DOC_TOTAL = 0;
+    let EMAIL_PAGE = 1, EMAIL_PAGE_SIZE = 20, EMAIL_TOTAL = 0;
 
     function escapeHtml(s) {
       return String(s ?? '')
@@ -649,6 +669,7 @@
       if (ADMIN_TAB === 'conversations') await loadAdminSessions(1);
       if (ADMIN_TAB === 'negative') await loadNegativeFeedback(1);
       if (ADMIN_TAB === 'documents') await loadDocuments(1);
+      if (ADMIN_TAB === 'notifications') await loadEmailLogs(1);
     }
 
     async function loadDashboard() {
@@ -907,6 +928,78 @@
       } catch (e) {
         if (status) status.textContent = `❌ Crawl failed: ${e.message || e}`;
       }
+    }
+
+    async function sendTestEmail() {
+      const status = document.getElementById('status-msg');
+      if (status) status.textContent = `⏳ Sending test email...`;
+      try {
+        const res = await adminFetch(`${API}/api/admin/notifications/test-email`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+        if (status) status.textContent = `✅ Test email sent`;
+        loadEmailLogs(1);
+      } catch (e) {
+        if (status) status.textContent = `❌ Test email failed: ${e.message || e}`;
+      }
+    }
+
+    async function loadEmailLogs(page = 1) {
+      EMAIL_PAGE = page;
+      const status = document.getElementById('email-filter-status')?.value || "";
+      const kind = document.getElementById('email-filter-kind')?.value || "";
+
+      const qs = new URLSearchParams({ page: String(EMAIL_PAGE), page_size: String(EMAIL_PAGE_SIZE) });
+      if (status) qs.set('status', status);
+      if (kind) qs.set('kind', kind);
+
+      const holder = document.getElementById('emails-table');
+      if (holder) holder.textContent = "Loading…";
+
+      const res = await adminFetch(`${API}/api/admin/notifications/emails?${qs.toString()}`);
+      const data = await res.json();
+      EMAIL_TOTAL = data.total || 0;
+      _setPager('emails-page', EMAIL_PAGE, EMAIL_PAGE_SIZE, EMAIL_TOTAL);
+
+      const items = data.items || [];
+      if (!holder) return;
+      if (!items.length) {
+        holder.innerHTML = "<div>No email logs.</div>";
+        return;
+      }
+
+      holder.innerHTML = `
+        <table class="table">
+          <thead><tr><th>ID</th><th>Kind</th><th>Status</th><th>To</th><th>Subject</th><th>Error</th><th>At</th></tr></thead>
+          <tbody>
+            ${items.map(e => `
+              <tr>
+                <td>${escapeHtml(e.id)}</td>
+                <td>${escapeHtml(e.kind)}</td>
+                <td>${escapeHtml(e.status)}</td>
+                <td>${escapeHtml((e.to_emails || []).join(', '))}</td>
+                <td>${escapeHtml(e.subject)}</td>
+                <td>${escapeHtml((e.error || '').slice(0, 160))}</td>
+                <td>${escapeHtml(e.created_at)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+
+    function prevEmails() {
+      if (EMAIL_PAGE <= 1) return;
+      loadEmailLogs(EMAIL_PAGE - 1);
+    }
+
+    function nextEmails() {
+      if (EMAIL_PAGE * EMAIL_PAGE_SIZE >= EMAIL_TOTAL) return;
+      loadEmailLogs(EMAIL_PAGE + 1);
     }
 
     // ── Stats & departments ──────────────────────────────────────────────────

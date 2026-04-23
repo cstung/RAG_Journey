@@ -460,7 +460,7 @@ def ingest_all(docs_dir: str = "/data/docs") -> list[dict]:
             dirs.remove(".versions")
         for fname in sorted(files):
             ext = os.path.splitext(fname)[1].lower()
-            if ext not in (".pdf", ".docx", ".txt", ".html", ".htm"):
+            if ext not in (".pdf", ".doc", ".docx", ".txt", ".html", ".htm"):
                 continue
             chunks = ingest_file(os.path.join(root, fname))
             results.append({"file": fname, "chunks": chunks})

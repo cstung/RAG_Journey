@@ -58,6 +58,19 @@ CREATE TABLE IF NOT EXISTS documents (
   uploaded_at DATETIME DEFAULT (datetime('now')),
   uploaded_by TEXT DEFAULT 'admin'
 );
+
+CREATE TABLE IF NOT EXISTS email_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  to_emails TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  body TEXT NOT NULL,
+  status TEXT NOT NULL,
+  error TEXT,
+  created_at DATETIME DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_email_logs_created_at ON email_logs(created_at);
 """
 
 
@@ -688,5 +701,80 @@ def feedback_summary(session_id: str | None = None) -> dict:
             "reason_counts": [{"reason": r["reason"], "count": int(r["c"])} for r in reasons],
             "session_id": session_id or None,
         }
+    finally:
+        conn.close()
+
+
+def log_email(kind: str, to_emails: list[str], subject: str, body: str, status: str, error: str | None = None) -> dict:
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "INSERT INTO email_logs (kind, to_emails, subject, body, status, error) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                kind,
+                json.dumps(to_emails, ensure_ascii=False),
+                subject,
+                body,
+                status,
+                error,
+            ),
+        )
+        row = conn.execute(
+            "SELECT id, kind, to_emails, subject, body, status, error, created_at FROM email_logs WHERE id = ?",
+            (int(cur.lastrowid),),
+        ).fetchone()
+        conn.commit()
+        d = dict(row) if row else {}
+        if d.get("to_emails"):
+            try:
+                d["to_emails"] = json.loads(d["to_emails"])
+            except Exception:
+                pass
+        return d
+    finally:
+        conn.close()
+
+
+def list_email_logs(page: int = 1, page_size: int = 20, kind: str | None = None, status: str | None = None) -> dict:
+    page = max(1, int(page))
+    page_size = max(1, min(100, int(page_size)))
+    offset = (page - 1) * page_size
+
+    where = []
+    args: list = []
+    if kind:
+        where.append("kind = ?")
+        args.append(kind)
+    if status:
+        where.append("status = ?")
+        args.append(status)
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+
+    conn = get_db()
+    try:
+        total_row = conn.execute(
+            f"SELECT COUNT(1) AS c FROM email_logs {where_sql}",
+            args,
+        ).fetchone()
+        total = int(total_row["c"]) if total_row else 0
+
+        rows = conn.execute(
+            "SELECT id, kind, to_emails, subject, status, error, created_at "
+            f"FROM email_logs {where_sql} "
+            "ORDER BY id DESC "
+            "LIMIT ? OFFSET ?",
+            [*args, page_size, offset],
+        ).fetchall()
+        items = []
+        for r in rows:
+            d = dict(r)
+            if d.get("to_emails"):
+                try:
+                    d["to_emails"] = json.loads(d["to_emails"])
+                except Exception:
+                    pass
+            items.append(d)
+
+        return {"items": items, "page": page, "page_size": page_size, "total": total}
     finally:
         conn.close()
