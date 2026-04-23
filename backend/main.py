@@ -84,6 +84,14 @@ VERSIONS_DIRNAME = ".versions"
 MAX_DOC_VERSIONS = 5
 
 
+class SPAStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        if response.status_code == 404 and self.html:
+            return await super().get_response("index.html", scope)
+        return response
+
+
 def _safe_stem(filename: str) -> str:
     stem = os.path.splitext(filename)[0]
     stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._-")
@@ -697,7 +705,7 @@ _FRONTEND_DIST = _first_existing_dir(
 )
 
 if _FRONTEND_DIST:
-    app.mount("/", StaticFiles(directory=_FRONTEND_DIST, html=True), name="frontend")
+    app.mount("/", SPAStaticFiles(directory=_FRONTEND_DIST, html=True), name="frontend")
 else:
     _STATIC_DIR = _first_existing_dir(
         [
@@ -706,4 +714,4 @@ else:
         ]
     )
     if _STATIC_DIR:
-        app.mount("/", StaticFiles(directory=_STATIC_DIR, html=True), name="static")
+        app.mount("/", SPAStaticFiles(directory=_STATIC_DIR, html=True), name="static")

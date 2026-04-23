@@ -1,5 +1,11 @@
 .env
 
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
 # Runtime data
 data/docs/**
 data/chroma/**

@@ -30,6 +30,7 @@ export function TopBar({ isAdmin, stats, onAdminClick }: TopBarProps) {
             size="sm"
             onClick={onAdminClick}
             className="gap-1.5 rounded-full"
+            aria-label={isAdmin ? "Logout" : "Admin"}
           >
             {isAdmin ? (
               <>
