@@ -20,7 +20,7 @@ def count_tokens(text: str) -> int:
     return len(encoder.encode(text))
 
 
-def _make_chunk(text, file_id, page, idx, department, category, filename):
+def _make_chunk(text, file_id, page, idx, department, category, filename, document_id=None, version=None):
     chunk_id = hashlib.md5(f"{file_id}_p{page}_c{idx}".encode()).hexdigest()
     return {
         "id": chunk_id,
@@ -32,23 +32,25 @@ def _make_chunk(text, file_id, page, idx, department, category, filename):
             "chunk_idx":  idx,
             "department": department,
             "category":   category,
+            "document_id": document_id,
+            "doc_version": version,
         }
     }
 
 
-def _split_by_tokens(text, file_id, page, start_idx, department, category, filename):
+def _split_by_tokens(text, file_id, page, start_idx, department, category, filename, document_id=None, version=None):
     tokens = encoder.encode(text)
     chunks, pos, idx = [], 0, start_idx
     while pos < len(tokens):
         end = min(pos + MAX_CHUNK_TOKENS, len(tokens))
         chunks.append(_make_chunk(encoder.decode(tokens[pos:end]),
-                                  file_id, page, idx, department, category, filename))
+                                  file_id, page, idx, department, category, filename, document_id, version))
         pos += MAX_CHUNK_TOKENS - OVERLAP_TOKENS
         idx += 1
     return chunks
 
 
-def structural_chunk(text, file_id, page, department, category, filename):
+def structural_chunk(text, file_id, page, department, category, filename, document_id=None, version=None):
     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
     chunks, buffer, buffer_tokens, chunk_idx = [], "", 0, 0
 
@@ -56,14 +58,14 @@ def structural_chunk(text, file_id, page, department, category, filename):
         pt = count_tokens(para)
         if pt > MAX_CHUNK_TOKENS:
             if buffer and buffer_tokens >= MIN_CHUNK_TOKENS:
-                chunks.append(_make_chunk(buffer, file_id, page, chunk_idx, department, category, filename))
+                chunks.append(_make_chunk(buffer, file_id, page, chunk_idx, department, category, filename, document_id, version))
                 chunk_idx += 1
                 buffer, buffer_tokens = "", 0
-            sub = _split_by_tokens(para, file_id, page, chunk_idx, department, category, filename)
+            sub = _split_by_tokens(para, file_id, page, chunk_idx, department, category, filename, document_id, version)
             chunks.extend(sub); chunk_idx += len(sub)
         elif buffer_tokens + pt > MAX_CHUNK_TOKENS:
             if buffer_tokens >= MIN_CHUNK_TOKENS:
-                chunks.append(_make_chunk(buffer, file_id, page, chunk_idx, department, category, filename))
+                chunks.append(_make_chunk(buffer, file_id, page, chunk_idx, department, category, filename, document_id, version))
                 chunk_idx += 1
             buffer, buffer_tokens = para, pt
         else:
@@ -71,7 +73,7 @@ def structural_chunk(text, file_id, page, department, category, filename):
             buffer_tokens += pt
 
     if buffer and buffer_tokens >= MIN_CHUNK_TOKENS:
-        chunks.append(_make_chunk(buffer, file_id, page, chunk_idx, department, category, filename))
+        chunks.append(_make_chunk(buffer, file_id, page, chunk_idx, department, category, filename, document_id, version))
     return chunks
 
 
@@ -81,7 +83,7 @@ def get_embedding(text: str) -> list[float]:
     ).data[0].embedding
 
 
-def ocr_pdf(filepath: str, file_id: str, department: str, category: str, filename: str) -> list:
+def ocr_pdf(filepath: str, file_id: str, department: str, category: str, filename: str, document_id=None, version=None) -> list:
     """Convert PDF pages to images and run OCR."""
     print(f"    [OCR] Triggered fallback for {file_id}. This may take a moment...")
     try:
@@ -95,9 +97,9 @@ def ocr_pdf(filepath: str, file_id: str, department: str, category: str, filenam
             
             # Since OCR loses page-level structure often, we treat each page as a single chunk 
             # or run structural chunking if text is long.
-            chunks = structural_chunk(text, file_id, i, department, category, filename)
+            chunks = structural_chunk(text, file_id, i, department, category, filename, document_id, version)
             if not chunks and len(text) >= 10:
-                chunks = [_make_chunk(text, file_id, i, 0, department, category, filename)]
+                chunks = [_make_chunk(text, file_id, i, 0, department, category, filename, document_id, version)]
             all_chunks.extend(chunks)
         
         print(f"    [OCR] Completed: {len(all_chunks)} chunks found.")
@@ -119,7 +121,7 @@ def detect_department_category(filepath: str) -> tuple[str, str]:
     return rel[0], rel[1]
 
 
-def ingest_pdf(filepath: str, department: str = None, category: str = None) -> int:
+def ingest_pdf(filepath: str, department: str = None, category: str = None, document_id=None, version=None) -> int:
     # Use relative path as a unique ID to prevent collisions between files with same name
     docs_dir = "/data/docs"
     try:
@@ -132,7 +134,7 @@ def ingest_pdf(filepath: str, department: str = None, category: str = None) -> i
         d, c = detect_department_category(filepath)
         department = department or d
         category   = category   or c
-    print(f"  [Ingest] Processing: {file_id} ({department}/{category})")
+    print(f"  [Ingest] Processing: {file_id} ({department}/{category}) v{version if version is not None else '?'}")
     
     if not os.path.exists(filepath):
         print(f"  ERROR: File not found at {filepath}")
@@ -164,9 +166,9 @@ def ingest_pdf(filepath: str, department: str = None, category: str = None) -> i
         if len(text) < 5: 
             continue
         
-        chunks = structural_chunk(text, file_id, page_num, department, category, filename)
+        chunks = structural_chunk(text, file_id, page_num, department, category, filename, document_id, version)
         if not chunks and len(text) >= 5:
-            chunks = [_make_chunk(text, file_id, page_num, 0, department, category, filename)]
+            chunks = [_make_chunk(text, file_id, page_num, 0, department, category, filename, document_id, version)]
             
         all_chunks.extend(chunks)
 
@@ -176,7 +178,7 @@ def ingest_pdf(filepath: str, department: str = None, category: str = None) -> i
         print(f"  WARNING: No chunks generated for {file_id} (Total chars: {total_chars})")
         if total_chars == 0:
             # Automatic OCR fallback
-            all_chunks = ocr_pdf(filepath, file_id, department, category, filename)
+            all_chunks = ocr_pdf(filepath, file_id, department, category, filename, document_id, version)
             if not all_chunks:
                 print(f"  HINT: OCR also failed. This file might be empty or corrupted.")
                 return 0
@@ -249,7 +251,9 @@ def ingest_all(docs_dir: str = "/data/docs") -> list[dict]:
     
     # 2. Ingest current files
     results = []
-    for root, _, files in os.walk(docs_dir):
+    for root, dirs, files in os.walk(docs_dir):
+        if ".versions" in dirs:
+            dirs.remove(".versions")
         for fname in sorted(files):
             if not fname.lower().endswith(".pdf"): continue
             chunks = ingest_pdf(os.path.join(root, fname))

@@ -8,6 +8,8 @@ COMPANY_NAME = os.getenv("COMPANY_NAME", "công ty")
 LLM_MODEL    = os.getenv("LLM_MODEL", "gpt-4o-mini")
 TOP_K        = int(os.getenv("TOP_K", "6"))
 RETRIEVE_N   = 15
+HISTORY_MAX  = 8
+HISTORY_CHARS_PER_MSG = 800
 
 
 # ── BM25 Index ─────────────────────────────────────────────────────────────
@@ -91,14 +93,40 @@ def get_embedding(text: str) -> list[float]:
     ).data[0].embedding
 
 
-def rewrite_query(question: str) -> str:
+def _trim(text: str, n: int) -> str:
+    text = (text or "").strip()
+    if len(text) <= n:
+        return text
+    return text[:n].rstrip() + "…"
+
+
+def _history_for_llm(history: list[dict] | None) -> list[dict]:
+    if not history:
+        return []
+    out: list[dict] = []
+    for m in history[-HISTORY_MAX:]:
+        role = (m.get("role") or "").strip().lower()
+        if role not in ("user", "assistant"):
+            continue
+        out.append({"role": role, "content": _trim(str(m.get("content", "")), HISTORY_CHARS_PER_MSG)})
+    return out
+
+
+def rewrite_query(question: str, history: list[dict] | None = None) -> str:
+    hist = _history_for_llm(history)
+    convo = "\n".join(
+        ("User: " if m["role"] == "user" else "Assistant: ") + m["content"]
+        for m in hist
+    ).strip()
+
     resp = client.chat.completions.create(
         model=LLM_MODEL,
         messages=[{"role": "user", "content": (
             "Bạn là trợ lý tìm kiếm tài liệu nội bộ công ty.\n"
             "Viết lại câu hỏi sau thành câu tìm kiếm đầy đủ hơn, thêm từ khóa liên quan.\n"
             "Chỉ trả về câu tìm kiếm, không giải thích.\n\n"
-            f"Câu hỏi: {question}\nCâu tìm kiếm:"
+            + (f"CONVERSATION CONTEXT:\n{convo}\n\n" if convo else "")
+            + f"Câu hỏi: {question}\nCâu tìm kiếm:"
         )}],
         temperature=0, max_tokens=120
     )
@@ -151,7 +179,7 @@ def rrf_merge(vec_ids: list[str], bm25_ids: list[str], k: int = 60) -> list[str]
 
 # ── Main query ─────────────────────────────────────────────────────────────
 
-def query(question: str, department: str = None) -> dict:
+def query(question: str, department: str = None, history: list[dict] | None = None) -> dict:
     total = collection.count()
     print(f"[RAG] Total chunks in DB: {total} | BM25 index size: {len(_idx.ids)}")
 
@@ -159,7 +187,7 @@ def query(question: str, department: str = None) -> dict:
         return {"answer": "Chưa có tài liệu nào. Vui lòng upload tài liệu trước.",
                 "sources": [], "rewritten_query": question}
 
-    rewritten  = rewrite_query(question)
+    rewritten  = rewrite_query(question, history=history)
     print(f"[RAG] Q: {question!r} → {rewritten!r}")
 
     vec_ids   = vector_search(rewritten, RETRIEVE_N, department)
@@ -192,6 +220,8 @@ def query(question: str, department: str = None) -> dict:
         for d, m in relevant
     )
 
+    hist_msgs = _history_for_llm(history)
+
     resp = client.chat.completions.create(
         model=LLM_MODEL,
         messages=[
@@ -200,6 +230,7 @@ def query(question: str, department: str = None) -> dict:
                 "Trả lời dựa trên tài liệu được cung cấp, ngắn gọn, rõ ràng bằng tiếng Việt. "
                 "Không bịa đặt ngoài phạm vi tài liệu."
             )},
+            *hist_msgs,
             {"role": "user", "content": f"TÀI LIỆU:\n{context}\n\nCÂU HỎI: {question}"}
         ],
         temperature=0.1, max_tokens=1000

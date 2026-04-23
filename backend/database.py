@@ -143,7 +143,7 @@ def end_session(session_id: str) -> None:
     conn = get_db()
     try:
         cur = conn.execute(
-            "UPDATE sessions SET ended_at = datetime('now') WHERE id = ?",
+            "UPDATE sessions SET ended_at = COALESCE(ended_at, datetime('now')) WHERE id = ?",
             (session_id,),
         )
         if cur.rowcount == 0:
@@ -218,5 +218,376 @@ def get_session(session_id: str) -> dict:
         out = dict(sess)
         out["messages"] = messages
         return out
+    finally:
+        conn.close()
+
+
+def get_recent_messages(session_id: str, limit: int = 8) -> list[dict]:
+    if not session_id:
+        return []
+    limit = max(0, min(int(limit), 50))
+    if limit == 0:
+        return []
+
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT id, session_id, role, content, sources, rewritten_query, created_at "
+            "FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT ?",
+            (session_id, limit),
+        ).fetchall()
+        rows = list(reversed(rows))
+
+        messages = []
+        for r in rows:
+            d = dict(r)
+            if d.get("sources"):
+                try:
+                    d["sources"] = json.loads(d["sources"])
+                except Exception:
+                    pass
+            messages.append(d)
+        return messages
+    finally:
+        conn.close()
+
+
+def list_sessions(
+    page: int = 1,
+    page_size: int = 20,
+    user_name: str | None = None,
+    user_lang: str | None = None,
+    status: str | None = None,  # "active" | "ended" | None
+    created_from: str | None = None,  # ISO8601 date/datetime
+    created_to: str | None = None,    # ISO8601 date/datetime
+) -> dict:
+    page = max(1, int(page))
+    page_size = max(1, min(100, int(page_size)))
+    offset = (page - 1) * page_size
+
+    where = []
+    args: list = []
+
+    if user_name:
+        where.append("user_name LIKE ?")
+        args.append(f"%{user_name}%")
+    if user_lang:
+        where.append("user_lang = ?")
+        args.append(user_lang)
+    if status == "active":
+        where.append("ended_at IS NULL")
+    elif status == "ended":
+        where.append("ended_at IS NOT NULL")
+
+    if created_from:
+        where.append("created_at >= ?")
+        args.append(created_from)
+    if created_to:
+        where.append("created_at <= ?")
+        args.append(created_to)
+
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+
+    conn = get_db()
+    try:
+        total_row = conn.execute(
+            f"SELECT COUNT(1) AS c FROM sessions {where_sql}",
+            args,
+        ).fetchone()
+        total = int(total_row["c"]) if total_row else 0
+
+        rows = conn.execute(
+            "SELECT id, user_name, user_lang, created_at, ended_at "
+            f"FROM sessions {where_sql} "
+            "ORDER BY created_at DESC "
+            "LIMIT ? OFFSET ?",
+            [*args, page_size, offset],
+        ).fetchall()
+        sessions = [dict(r) for r in rows]
+
+        return {
+            "items": sessions,
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+        }
+    finally:
+        conn.close()
+
+
+def get_session_detail(session_id: str) -> dict:
+    out = get_session(session_id)
+    conn = get_db()
+    try:
+        fb = conn.execute(
+            "SELECT id, message_id, session_id, rating, reason, created_at "
+            "FROM feedback WHERE session_id = ? ORDER BY id ASC",
+            (session_id,),
+        ).fetchall()
+        out["feedback"] = [dict(r) for r in fb]
+        return out
+    finally:
+        conn.close()
+
+
+def list_negative_feedback(
+    page: int = 1,
+    page_size: int = 20,
+    threshold: int = 2,
+    session_id: str | None = None,
+    user_name: str | None = None,
+) -> dict:
+    page = max(1, int(page))
+    page_size = max(1, min(100, int(page_size)))
+    offset = (page - 1) * page_size
+    threshold = int(threshold)
+
+    where = ["f.rating <= ?"]
+    args: list = [threshold]
+
+    if session_id:
+        where.append("f.session_id = ?")
+        args.append(session_id)
+    if user_name:
+        where.append("s.user_name LIKE ?")
+        args.append(f"%{user_name}%")
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    conn = get_db()
+    try:
+        total_row = conn.execute(
+            "SELECT COUNT(1) AS c "
+            "FROM feedback f "
+            "JOIN sessions s ON s.id = f.session_id "
+            f"{where_sql}",
+            args,
+        ).fetchone()
+        total = int(total_row["c"]) if total_row else 0
+
+        rows = conn.execute(
+            "SELECT "
+            "f.id, f.message_id, f.session_id, f.rating, f.reason, f.created_at, "
+            "s.user_name, s.user_lang, "
+            "m.content AS message_content "
+            "FROM feedback f "
+            "JOIN sessions s ON s.id = f.session_id "
+            "LEFT JOIN messages m ON m.id = f.message_id "
+            f"{where_sql} "
+            "ORDER BY f.created_at DESC "
+            "LIMIT ? OFFSET ?",
+            [*args, page_size, offset],
+        ).fetchall()
+        items = [dict(r) for r in rows]
+
+        return {
+            "items": items,
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "threshold": threshold,
+        }
+    finally:
+        conn.close()
+
+
+def get_active_document(filename: str, department: str, category: str = "general") -> dict | None:
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT id, filename, department, category, version, is_active, file_path, chunk_count, uploaded_at, uploaded_by "
+            "FROM documents WHERE filename = ? AND department = ? AND category = ? AND is_active = 1 "
+            "ORDER BY version DESC LIMIT 1",
+            (filename, department, category),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def update_document_file_path(document_id: int, file_path: str) -> None:
+    conn = get_db()
+    try:
+        conn.execute("UPDATE documents SET file_path = ? WHERE id = ?", (file_path, document_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_document_chunk_count(document_id: int, chunk_count: int) -> None:
+    conn = get_db()
+    try:
+        conn.execute("UPDATE documents SET chunk_count = ? WHERE id = ?", (int(chunk_count), document_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def create_document_version(
+    filename: str,
+    department: str,
+    category: str,
+    file_path: str,
+    uploaded_by: str = "admin",
+) -> dict:
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT COALESCE(MAX(version), 0) AS v FROM documents WHERE filename = ? AND department = ? AND category = ?",
+            (filename, department, category),
+        ).fetchone()
+        next_version = int(row["v"] or 0) + 1
+
+        conn.execute(
+            "UPDATE documents SET is_active = 0 WHERE filename = ? AND department = ? AND category = ? AND is_active = 1",
+            (filename, department, category),
+        )
+        cur = conn.execute(
+            "INSERT INTO documents (filename, department, category, version, is_active, file_path, uploaded_by) "
+            "VALUES (?, ?, ?, ?, 1, ?, ?)",
+            (filename, department, category, next_version, file_path, uploaded_by),
+        )
+        doc_id = int(cur.lastrowid)
+        doc = conn.execute(
+            "SELECT id, filename, department, category, version, is_active, file_path, chunk_count, uploaded_at, uploaded_by "
+            "FROM documents WHERE id = ?",
+            (doc_id,),
+        ).fetchone()
+        conn.commit()
+        return dict(doc)
+    finally:
+        conn.close()
+
+
+def ensure_document_record_for_existing_file(
+    filename: str,
+    department: str,
+    category: str,
+    file_path: str,
+    version: int = 1,
+    is_active: int = 0,
+    uploaded_by: str = "admin",
+) -> dict:
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "INSERT INTO documents (filename, department, category, version, is_active, file_path, uploaded_by) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (filename, department, category, int(version), int(is_active), file_path, uploaded_by),
+        )
+        doc_id = int(cur.lastrowid)
+        doc = conn.execute(
+            "SELECT id, filename, department, category, version, is_active, file_path, chunk_count, uploaded_at, uploaded_by "
+            "FROM documents WHERE id = ?",
+            (doc_id,),
+        ).fetchone()
+        conn.commit()
+        return dict(doc)
+    finally:
+        conn.close()
+
+
+def prune_document_versions(
+    filename: str,
+    department: str,
+    category: str,
+    keep: int = 5,
+) -> list[dict]:
+    keep = max(1, min(50, int(keep)))
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT id, filename, department, category, version, is_active, file_path "
+            "FROM documents WHERE filename = ? AND department = ? AND category = ? "
+            "ORDER BY version DESC",
+            (filename, department, category),
+        ).fetchall()
+        docs = [dict(r) for r in rows]
+        to_delete = docs[keep:]
+        if to_delete:
+            ids = [d["id"] for d in to_delete]
+            conn.execute(
+                f"DELETE FROM documents WHERE id IN ({','.join(['?'] * len(ids))})",
+                ids,
+            )
+        conn.commit()
+        return to_delete
+    finally:
+        conn.close()
+
+
+def list_documents(
+    page: int = 1,
+    page_size: int = 20,
+    filename: str | None = None,
+    department: str | None = None,
+    category: str | None = None,
+    active: int | None = None,  # 1|0|None
+) -> dict:
+    page = max(1, int(page))
+    page_size = max(1, min(100, int(page_size)))
+    offset = (page - 1) * page_size
+
+    where = []
+    args: list = []
+    if filename:
+        where.append("filename LIKE ?")
+        args.append(f"%{filename}%")
+    if department:
+        where.append("department = ?")
+        args.append(department)
+    if category:
+        where.append("category = ?")
+        args.append(category)
+    if active is not None:
+        where.append("is_active = ?")
+        args.append(int(active))
+
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+
+    conn = get_db()
+    try:
+        total_row = conn.execute(
+            f"SELECT COUNT(1) AS c FROM documents {where_sql}",
+            args,
+        ).fetchone()
+        total = int(total_row["c"]) if total_row else 0
+
+        rows = conn.execute(
+            "SELECT id, filename, department, category, version, is_active, file_path, chunk_count, uploaded_at, uploaded_by "
+            f"FROM documents {where_sql} "
+            "ORDER BY uploaded_at DESC, id DESC "
+            "LIMIT ? OFFSET ?",
+            [*args, page_size, offset],
+        ).fetchall()
+        items = [dict(r) for r in rows]
+        return {"items": items, "page": page, "page_size": page_size, "total": total}
+    finally:
+        conn.close()
+
+
+def get_document(document_id: int) -> dict | None:
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT id, filename, department, category, version, is_active, file_path, chunk_count, uploaded_at, uploaded_by "
+            "FROM documents WHERE id = ?",
+            (int(document_id),),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_document_versions(filename: str, department: str, category: str) -> list[dict]:
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT id, filename, department, category, version, is_active, file_path, chunk_count, uploaded_at, uploaded_by "
+            "FROM documents WHERE filename = ? AND department = ? AND category = ? "
+            "ORDER BY version DESC",
+            (filename, department, category),
+        ).fetchall()
+        return [dict(r) for r in rows]
     finally:
         conn.close()

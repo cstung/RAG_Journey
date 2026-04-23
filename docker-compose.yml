@@ -11,6 +11,7 @@ services:
       - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
       - TOP_K=${TOP_K:-5}
       - SQLITE_PATH=${SQLITE_PATH:-/data/sqlite/chatbot.db}
+      - ADMIN_JWT_SECRET=${ADMIN_JWT_SECRET:-change-me}
     volumes:
       - ./data/sqlite:/data/sqlite    # SQLite DB (sessions/feedback/admins)
       - ./data/docs:/data/docs        # Thả PDF vào đây

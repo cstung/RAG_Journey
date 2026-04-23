@@ -69,6 +69,19 @@ docker exec internal-chatbot python ingest.py
 | `/api/upload` | POST | Upload 1 file PDF |
 | `/api/ingest-all` | POST | Index lại toàn bộ |
 
+### Admin JWT (24h)
+
+- `POST /api/admin/login` → `{ token, token_type, expires_at }`
+- Các endpoint admin dùng `Authorization: Bearer <token>`
+- Một số endpoint admin:
+  - `GET /api/admin/stats`
+  - `GET /api/admin/sessions`
+  - `GET /api/admin/sessions/{id}`
+  - `GET /api/admin/feedback/negative`
+  - `POST /api/admin/upload`
+  - `POST /api/admin/ingest-all`
+  - `POST /api/admin/reset`
+
 ### Ví dụ gọi API:
 
 ```bash
