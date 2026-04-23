@@ -453,9 +453,7 @@
   <div id="tab-negative" class="tab-content">
     <div class="filters">
       <select id="neg-threshold" title="Threshold">
-        <option value="2">≤ 2 (default)</option>
-        <option value="1">≤ 1</option>
-        <option value="0">0</option>
+        <option value="-1">👎 Only (default)</option>
       </select>
       <input id="neg-filter-name" placeholder="Filter user name…" />
       <input id="neg-filter-session" placeholder="Filter session_id…" />
@@ -474,6 +472,8 @@
 
   <div id="tab-documents" class="tab-content">
     <div class="filters">
+      <input id="crawl-url" placeholder="Crawl URL (https://...)" style="flex:1; min-width:260px;" />
+      <button class="btn secondary" onclick="crawlUrl()">Crawl + Index</button>
       <input id="doc-filter-filename" placeholder="Filter filename…" />
       <select id="doc-filter-active" title="Active">
         <option value="">All</option>
@@ -876,6 +876,27 @@
           </div>
         `
       );
+    }
+
+    async function crawlUrl() {
+      const url = document.getElementById('crawl-url')?.value?.trim();
+      if (!url) return;
+      const status = document.getElementById('status-msg');
+      if (status) status.textContent = `⏳ Crawling ${url}...`;
+      try {
+        const res = await adminFetch(`${API}/api/admin/crawl`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+        if (status) status.textContent = `✅ Crawled + indexed: ${data.file} (v${data.version}, ${data.chunks} chunks)`;
+        loadDocuments(1);
+        loadStats();
+      } catch (e) {
+        if (status) status.textContent = `❌ Crawl failed: ${e.message || e}`;
+      }
     }
 
     // ── Stats & departments ──────────────────────────────────────────────────

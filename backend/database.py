@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS feedback (
   created_at DATETIME DEFAULT (datetime('now'))
 );
 
+CREATE INDEX IF NOT EXISTS idx_feedback_message_id ON feedback(message_id);
+
 CREATE TABLE IF NOT EXISTS admins (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   username TEXT UNIQUE NOT NULL,
@@ -333,7 +335,7 @@ def get_session_detail(session_id: str) -> dict:
 def list_negative_feedback(
     page: int = 1,
     page_size: int = 20,
-    threshold: int = 2,
+    threshold: int = -1,
     session_id: str | None = None,
     user_name: str | None = None,
 ) -> dict:
@@ -341,9 +343,11 @@ def list_negative_feedback(
     page_size = max(1, min(100, int(page_size)))
     offset = (page - 1) * page_size
     threshold = int(threshold)
-
-    where = ["f.rating <= ?"]
-    args: list = [threshold]
+    where = ["f.rating < 0"]
+    args: list = []
+    if threshold is not None:
+        where.append("f.rating <= ?")
+        args.append(threshold)
 
     if session_id:
         where.append("f.session_id = ?")
@@ -589,5 +593,100 @@ def list_document_versions(filename: str, department: str, category: str) -> lis
             (filename, department, category),
         ).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def upsert_feedback(message_id: int, session_id: str, rating: int, reason: str | None) -> dict:
+    message_id = int(message_id)
+    rating = int(rating)
+    session_id = (session_id or "").strip()
+
+    conn = get_db()
+    try:
+        msg = conn.execute(
+            "SELECT id, session_id, role FROM messages WHERE id = ?",
+            (message_id,),
+        ).fetchone()
+        if not msg:
+            raise KeyError("message not found")
+        if session_id and str(msg["session_id"]) != session_id:
+            raise ValueError("session_id does not match message")
+        if str(msg["role"]).lower() not in ("assistant", "bot"):
+            raise ValueError("feedback can only be attached to assistant message")
+
+        existing_rows = conn.execute(
+            "SELECT id FROM feedback WHERE message_id = ? ORDER BY id DESC",
+            (message_id,),
+        ).fetchall()
+
+        if existing_rows:
+            keep_id = int(existing_rows[0]["id"])
+            extra_ids = [int(r["id"]) for r in existing_rows[1:]]
+            if extra_ids:
+                conn.execute(
+                    f"DELETE FROM feedback WHERE id IN ({','.join(['?'] * len(extra_ids))})",
+                    extra_ids,
+                )
+            conn.execute(
+                "UPDATE feedback SET rating = ?, reason = ?, created_at = datetime('now') WHERE id = ?",
+                (rating, reason, keep_id),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO feedback (message_id, session_id, rating, reason) VALUES (?, ?, ?, ?)",
+                (message_id, str(msg["session_id"]), rating, reason),
+            )
+
+        row = conn.execute(
+            "SELECT id, message_id, session_id, rating, reason, created_at FROM feedback WHERE message_id = ?",
+            (message_id,),
+        ).fetchone()
+        conn.commit()
+        return dict(row) if row else {}
+    finally:
+        conn.close()
+
+
+def feedback_summary(session_id: str | None = None) -> dict:
+    session_id = (session_id or "").strip()
+    where = ""
+    args: list = []
+    if session_id:
+        where = "WHERE session_id = ?"
+        args.append(session_id)
+
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT "
+            "COUNT(1) AS total, "
+            "SUM(CASE WHEN rating = 1 THEN 1 ELSE 0 END) AS positive, "
+            "SUM(CASE WHEN rating = -1 THEN 1 ELSE 0 END) AS negative "
+            f"FROM feedback {where}",
+            args,
+        ).fetchone()
+
+        reasons = conn.execute(
+            "SELECT COALESCE(reason, '') AS reason, COUNT(1) AS c "
+            f"FROM feedback {where} "
+            "AND rating = -1 "
+            "GROUP BY COALESCE(reason, '') "
+            "ORDER BY c DESC",
+            args,
+        ).fetchall() if where else conn.execute(
+            "SELECT COALESCE(reason, '') AS reason, COUNT(1) AS c "
+            "FROM feedback WHERE rating = -1 "
+            "GROUP BY COALESCE(reason, '') "
+            "ORDER BY c DESC",
+        ).fetchall()
+
+        return {
+            "total": int(row["total"] or 0) if row else 0,
+            "positive": int(row["positive"] or 0) if row else 0,
+            "negative": int(row["negative"] or 0) if row else 0,
+            "reason_counts": [{"reason": r["reason"], "count": int(r["c"])} for r in reasons],
+            "session_id": session_id or None,
+        }
     finally:
         conn.close()

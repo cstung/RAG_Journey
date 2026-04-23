@@ -1,11 +1,14 @@
 import base64
 import os, shutil
 import re
+import time
+from urllib.parse import urlparse
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+import httpx
 from db import collection
 from admin_auth import create_admin_token, verify_admin_token
 from database import (
@@ -13,6 +16,7 @@ from database import (
     create_document_version,
     create_session,
     end_session,
+    feedback_summary,
     get_session,
     get_recent_messages,
     get_active_document,
@@ -27,11 +31,12 @@ from database import (
     ensure_document_record_for_existing_file,
     set_document_chunk_count,
     update_document_file_path,
+    upsert_feedback,
     session_exists,
     verify_admin_credentials,
 )
 from rag import query as rag_query, rebuild_index, get_departments
-from ingest import ingest_pdf, ingest_all
+from ingest import ingest_all, ingest_file, extract_html_text
 
 def _parse_basic_auth(authorization: str | None) -> tuple[str, str] | None:
     if not authorization:
@@ -103,6 +108,20 @@ class SessionStartRequest(BaseModel):
 class AdminLoginRequest(BaseModel):
     username: str
     password: str
+
+
+class FeedbackRequest(BaseModel):
+    message_id: int
+    session_id: str
+    rating: int
+    reason: str | None = None
+
+
+class CrawlRequest(BaseModel):
+    url: str
+    department: str = "General"
+    category: str = "general"
+    filename: str | None = None
 
 
 @app.get("/api/health")
@@ -192,7 +211,7 @@ def admin_get_session(session_id: str):
 def admin_negative_feedback(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
-    threshold: int = Query(default=2, ge=0, le=5),
+    threshold: int = Query(default=-1, ge=-5, le=0),
     session_id: str | None = Query(default=None),
     user_name: str | None = Query(default=None),
 ):
@@ -309,6 +328,31 @@ def session_end(session_id: str):
         raise HTTPException(404, "Session not found")
 
 
+@app.post("/api/feedback")
+def submit_feedback(req: FeedbackRequest):
+    if req.rating not in (1, -1):
+        raise HTTPException(400, "rating must be 1 or -1")
+    if req.rating == -1 and (not req.reason or not req.reason.strip()):
+        raise HTTPException(400, "reason is required for negative feedback")
+    try:
+        fb = upsert_feedback(
+            message_id=req.message_id,
+            session_id=req.session_id,
+            rating=req.rating,
+            reason=req.reason.strip() if req.reason else None,
+        )
+    except KeyError:
+        raise HTTPException(404, "Message not found")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"status": "ok", "feedback": fb}
+
+
+@app.get("/api/feedback/summary")
+def feedback_summary_api(session_id: str | None = Query(default=None)):
+    return feedback_summary(session_id=session_id)
+
+
 @app.post("/api/upload")
 async def upload(
     request: Request,
@@ -333,8 +377,8 @@ async def admin_upload(
 
 
 async def _handle_upload(request: Request, file: UploadFile, department: str, category: str, uploaded_by: str = "admin"):
-    if not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(400, "Chỉ hỗ trợ file PDF")
+    if not (file.filename.lower().endswith(".pdf") or file.filename.lower().endswith(".docx")):
+        raise HTTPException(400, "Chỉ hỗ trợ file PDF hoặc DOCX")
 
     dest_dir = os.path.join(DOCS_DIR, department)
     os.makedirs(dest_dir, exist_ok=True)
@@ -384,7 +428,7 @@ async def _handle_upload(request: Request, file: UploadFile, department: str, ca
     except Exception as e:
         print(f"[Upload] Warning: could not delete old chunks for {dest}: {e}")
 
-    chunks = ingest_pdf(dest, department=department, category=category, document_id=doc["id"], version=doc["version"])
+    chunks = ingest_file(dest, department=department, category=category, document_id=doc["id"], version=doc["version"])
     set_document_chunk_count(doc["id"], chunks)
     rebuild_index()  # refresh BM25 after every upload
 
@@ -413,6 +457,123 @@ async def _handle_upload(request: Request, file: UploadFile, department: str, ca
         "chunks":     chunks,
         "db_total":   collection.count(),
         "message":    f"Đã index v{doc['version']} ({chunks} chunks) từ {file.filename} [{department}]"
+    }
+
+
+def _sanitize_filename(name: str, ext: str = ".txt") -> str:
+    name = re.sub(r"[^A-Za-z0-9._-]+", "_", (name or "").strip()).strip("._-")
+    if not name:
+        name = "crawled"
+    if not name.lower().endswith(ext):
+        name += ext
+    return name
+
+
+def _is_blocked_crawl_target(u: str) -> bool:
+    try:
+        p = urlparse(u)
+    except Exception:
+        return True
+    if p.scheme not in ("http", "https"):
+        return True
+    host = (p.hostname or "").lower()
+    if not host:
+        return True
+    if host in ("localhost",):
+        return True
+    if host.startswith("127."):
+        return True
+    if host == "169.254.169.254":
+        return True
+    return False
+
+
+async def _fetch_url(url: str) -> tuple[str, str]:
+    headers = {"User-Agent": "internal-chatbot/1.0"}
+    timeout = httpx.Timeout(15.0, connect=10.0)
+    async with httpx.AsyncClient(follow_redirects=True, headers=headers, timeout=timeout) as client:
+        r = await client.get(url)
+        r.raise_for_status()
+        content_type = (r.headers.get("content-type") or "").lower()
+        text = r.text
+        return content_type, text
+
+
+@app.post("/api/admin/crawl")
+async def admin_crawl(req: CrawlRequest, request: Request):
+    if _is_blocked_crawl_target(req.url):
+        raise HTTPException(400, "URL not allowed")
+
+    dept = (req.department or "General").strip() or "General"
+    cat = (req.category or "general").strip() or "general"
+
+    content_type, body = await _fetch_url(req.url)
+
+    if "text/html" in content_type or body.lstrip().lower().startswith("<!doctype") or "<html" in body[:200].lower():
+        text = extract_html_text(body)
+    else:
+        text = body.strip()
+
+    if not text:
+        raise HTTPException(400, "No extractable content")
+
+    # Determine filename
+    parsed = urlparse(req.url)
+    base = req.filename or (parsed.path.split("/")[-1] or parsed.hostname or "crawled")
+    base = os.path.splitext(base)[0]
+    base = f"{base}_{int(time.time())}"
+    filename = _sanitize_filename(base, ext=".txt")
+
+    dest_dir = os.path.join(DOCS_DIR, dept)
+    os.makedirs(dest_dir, exist_ok=True)
+    dest = os.path.join(dest_dir, filename)
+
+    with open(dest, "w", encoding="utf-8") as f:
+        f.write(text)
+
+    doc = create_document_version(
+        filename=filename,
+        department=dept,
+        category=cat,
+        file_path=dest,
+        uploaded_by=getattr(request.state, "admin_user", None) or "admin",
+    )
+
+    try:
+        collection.delete(where={"file_id": _file_id_for_path(dest)})
+    except Exception:
+        pass
+
+    chunks = ingest_file(dest, department=dept, category=cat, document_id=doc["id"], version=doc["version"])
+    set_document_chunk_count(doc["id"], chunks)
+    rebuild_index()
+
+    removed = prune_document_versions(filename, dept, cat, keep=MAX_DOC_VERSIONS)
+    for r in removed:
+        fp = r.get("file_path")
+        if fp and os.path.exists(fp):
+            try:
+                docs_root = os.path.realpath(DOCS_DIR) + os.sep
+                fp_real = os.path.realpath(fp)
+                if fp_real.startswith(docs_root):
+                    os.remove(fp)
+            except Exception:
+                pass
+        if fp:
+            try:
+                collection.delete(where={"file_id": _file_id_for_path(fp)})
+            except Exception:
+                pass
+
+    return {
+        "status": "ok",
+        "url": req.url,
+        "file": filename,
+        "department": dept,
+        "category": cat,
+        "document_id": doc["id"],
+        "version": doc["version"],
+        "chunks": chunks,
     }
 
 

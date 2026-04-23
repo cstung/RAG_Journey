@@ -6,6 +6,8 @@ import pytesseract
 from pdf2image import convert_from_path
 from PIL import Image
 import tiktoken
+from docx import Document
+from bs4 import BeautifulSoup
 from db import collection
 
 client  = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -211,6 +213,182 @@ def ingest_pdf(filepath: str, department: str = None, category: str = None, docu
     return len(all_chunks)
 
 
+def extract_docx_text(filepath: str) -> str:
+    doc = Document(filepath)
+    parts: list[str] = []
+
+    for p in doc.paragraphs:
+        t = (p.text or "").strip()
+        if t:
+            parts.append(t)
+
+    for table in doc.tables:
+        for row in table.rows:
+            cells = []
+            for cell in row.cells:
+                c = (cell.text or "").strip()
+                if c:
+                    cells.append(c)
+            if cells:
+                parts.append(" | ".join(cells))
+
+    return "\n\n".join(parts).strip()
+
+
+def extract_html_text(html: str) -> str:
+    soup = BeautifulSoup(html or "", "html.parser")
+    for tag in soup(["script", "style", "noscript", "header", "footer", "nav", "aside"]):
+        tag.decompose()
+
+    main = soup.find("article") or soup.find("main") or soup.body or soup
+    text = main.get_text("\n", strip=True)
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    return "\n".join(lines).strip()
+
+
+def ingest_text(
+    text: str,
+    filepath: str,
+    department: str,
+    category: str,
+    document_id=None,
+    version=None,
+    source_url: str | None = None,
+) -> int:
+    docs_dir = "/data/docs"
+    try:
+        file_id = os.path.relpath(filepath, docs_dir).replace("\\", "/")
+    except Exception:
+        file_id = os.path.basename(filepath)
+
+    filename = os.path.basename(filepath)
+    if not text or not text.strip():
+        print(f"  WARNING: Empty text for {file_id}")
+        return 0
+
+    chunks = structural_chunk(
+        text.strip(),
+        file_id=file_id,
+        page=1,
+        department=department,
+        category=category,
+        filename=filename,
+        document_id=document_id,
+        version=version,
+    )
+    if not chunks:
+        chunks = [_make_chunk(text.strip(), file_id, 1, 0, department, category, filename, document_id, version)]
+
+    # Optionally stamp source URL into metadata (for crawled docs)
+    if source_url:
+        for c in chunks:
+            c["metadata"]["source_url"] = source_url
+
+    print(f"    - Generated {len(chunks)} chunks. Starting upsert to ChromaDB...")
+
+    BATCH = 40
+    try:
+        if not os.getenv("OPENAI_API_KEY"):
+            print("  CRITICAL ERROR: OPENAI_API_KEY is not set!")
+            return 0
+
+        for i in range(0, len(chunks), BATCH):
+            batch = chunks[i: i + BATCH]
+            collection.upsert(
+                ids=[c["id"] for c in batch],
+                embeddings=[get_embedding(c["text"]) for c in batch],
+                documents=[c["text"] for c in batch],
+                metadatas=[c["metadata"] for c in batch],
+            )
+            print(f"    - Upserted batch {i//BATCH + 1}/{(len(chunks)-1)//BATCH + 1}")
+    except Exception as e:
+        print(f"  CRITICAL ERROR during upsert for {file_id}: {e}")
+        return 0
+
+    print(f"  → Done: {len(chunks)} chunks | total in DB: {collection.count()}")
+    return len(chunks)
+
+
+def ingest_docx(filepath: str, department: str = None, category: str = None, document_id=None, version=None) -> int:
+    if not os.path.exists(filepath):
+        print(f"  ERROR: File not found at {filepath}")
+        return 0
+
+    filename = os.path.basename(filepath)
+    if department is None or category is None:
+        d, c = detect_department_category(filepath)
+        department = department or d
+        category = category or c
+
+    print(f"  [Ingest] Processing DOCX: {filename} ({department}/{category}) v{version if version is not None else '?'}")
+    try:
+        text = extract_docx_text(filepath)
+    except Exception as e:
+        print(f"  ERROR parsing DOCX {filepath}: {e}")
+        return 0
+
+    return ingest_text(text, filepath, department, category, document_id=document_id, version=version)
+
+
+def ingest_txt(filepath: str, department: str = None, category: str = None, document_id=None, version=None) -> int:
+    if not os.path.exists(filepath):
+        print(f"  ERROR: File not found at {filepath}")
+        return 0
+
+    filename = os.path.basename(filepath)
+    if department is None or category is None:
+        d, c = detect_department_category(filepath)
+        department = department or d
+        category = category or c
+
+    print(f"  [Ingest] Processing TXT: {filename} ({department}/{category}) v{version if version is not None else '?'}")
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+            text = f.read()
+    except Exception as e:
+        print(f"  ERROR reading TXT {filepath}: {e}")
+        return 0
+
+    return ingest_text(text, filepath, department, category, document_id=document_id, version=version)
+
+
+def ingest_html(filepath: str, department: str = None, category: str = None, document_id=None, version=None) -> int:
+    if not os.path.exists(filepath):
+        print(f"  ERROR: File not found at {filepath}")
+        return 0
+
+    filename = os.path.basename(filepath)
+    if department is None or category is None:
+        d, c = detect_department_category(filepath)
+        department = department or d
+        category = category or c
+
+    print(f"  [Ingest] Processing HTML: {filename} ({department}/{category}) v{version if version is not None else '?'}")
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+            html = f.read()
+        text = extract_html_text(html)
+    except Exception as e:
+        print(f"  ERROR reading HTML {filepath}: {e}")
+        return 0
+
+    return ingest_text(text, filepath, department, category, document_id=document_id, version=version)
+
+
+def ingest_file(filepath: str, department: str = None, category: str = None, document_id=None, version=None) -> int:
+    ext = os.path.splitext(filepath)[1].lower()
+    if ext == ".pdf":
+        return ingest_pdf(filepath, department=department, category=category, document_id=document_id, version=version)
+    if ext == ".docx":
+        return ingest_docx(filepath, department=department, category=category, document_id=document_id, version=version)
+    if ext == ".txt":
+        return ingest_txt(filepath, department=department, category=category, document_id=document_id, version=version)
+    if ext in (".html", ".htm"):
+        return ingest_html(filepath, department=department, category=category, document_id=document_id, version=version)
+    print(f"  [Ingest] Skip unsupported file: {filepath}")
+    return 0
+
+
 def prune_orphans(docs_dir: str = "/data/docs"):
     """Delete chunks from ChromaDB whose source files no longer exist on disk."""
     results = collection.get(include=["metadatas"])
@@ -255,8 +433,10 @@ def ingest_all(docs_dir: str = "/data/docs") -> list[dict]:
         if ".versions" in dirs:
             dirs.remove(".versions")
         for fname in sorted(files):
-            if not fname.lower().endswith(".pdf"): continue
-            chunks = ingest_pdf(os.path.join(root, fname))
+            ext = os.path.splitext(fname)[1].lower()
+            if ext not in (".pdf", ".docx", ".txt", ".html", ".htm"):
+                continue
+            chunks = ingest_file(os.path.join(root, fname))
             results.append({"file": fname, "chunks": chunks})
     
     total = sum(r["chunks"] for r in results)
