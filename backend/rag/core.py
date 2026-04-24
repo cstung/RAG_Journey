@@ -284,7 +284,7 @@ def query(question: str, session_id: str = None, department: str = None) -> dict
     resp = client.chat.completions.create(
         model=LLM_MODEL,
         messages=build_prompt(context=context, question=question, history=history),
-        temperature=0.1,
+        temperature=0.3, # Increased from 0.1 for more natural responses
         max_tokens=1000,
     )
 

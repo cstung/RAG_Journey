@@ -1,5 +1,5 @@
 # Tune these thresholds for your embedding model.
-SIMILARITY_THRESHOLD = 0.50  # Increased from 0.45 for stricter relevance
+SIMILARITY_THRESHOLD = 0.42  # Softened from 0.50 to reduce 'stubbornness'
 BM25_MIN_SCORE = 1.0         # Minimum BM25 score to be considered relevant
 
 NO_RESULTS_SENTINEL = "[KHÔNG TÌM THẤY TÀI LIỆU LIÊN QUAN]"
