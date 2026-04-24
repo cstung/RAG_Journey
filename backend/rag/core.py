@@ -11,7 +11,7 @@ from .citation_checker import extract_and_check_citation
 from .confidence_parser import extract_confidence
 from .output_guard import validate_output
 from .prompt_builder import build_prompt
-from .retrieval_gate import NO_RESULTS_SENTINEL, SIMILARITY_THRESHOLD, filter_chunks
+from .retrieval_gate import NO_RESULTS_SENTINEL, SIMILARITY_THRESHOLD, BM25_MIN_SCORE, filter_chunks, is_relevant
 
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -241,18 +241,23 @@ def query(question: str, session_id: str = None, department: str = None) -> dict
     bm25_ids = [hit[0] for hit in bm25_hits]
 
     print(f"[RAG] Vector hits: {len(vec_ids)} | BM25 hits: {len(bm25_ids)}")
+    if vec_sims:
+        print(f"[RAG] Max Vector similarity: {max(vec_sims):.4f} | Min: {min(vec_sims):.4f}")
 
-    filtered_docs = filter_chunks(vec_docs, vec_sims)
-    gated_vec_ids = [item_id for item_id, sim in zip(vec_ids, vec_sims) if sim >= SIMILARITY_THRESHOLD]
-    if len(filtered_docs) == 1 and filtered_docs[0] == NO_RESULTS_SENTINEL:
+    # Step 1: Filter vector hits by threshold
+    gated_vec_ids = [vid for vid, sim in zip(vec_ids, vec_sims) if sim >= SIMILARITY_THRESHOLD]
+
+    # Step 2: Filter BM25 hits by their own threshold (don't force them through vector gate)
+    # hit[2] is the BM25 score
+    gated_bm25_ids = [hit[0] for hit in bm25_hits if hit[2] >= BM25_MIN_SCORE]
+
+    if not gated_vec_ids and not gated_bm25_ids:
         context = NO_RESULTS_SENTINEL
-        available_sources: list[str] = []
-        relevant: list[tuple[str, dict]] = []
+        available_sources = []
+        relevant = []
     else:
-        gated_set = set(gated_vec_ids)
-        bm25_ids = [item_id for item_id in bm25_ids if item_id in gated_set]
-
-        merged_ids = rrf_merge(gated_vec_ids, bm25_ids)[:TOP_K]
+        # Merge results (RRF handles ranking across sources)
+        merged_ids = rrf_merge(gated_vec_ids, gated_bm25_ids)[:TOP_K]
         relevant = []
         for item_id in merged_ids:
             text = _idx.get_text(item_id)

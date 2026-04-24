@@ -6,7 +6,11 @@ import uuid
 import bcrypt
 
 
-DB_PATH = os.getenv("SQLITE_PATH", "/data/sqlite/chatbot.db")
+DB_PATH = os.getenv("SQLITE_PATH")
+if not DB_PATH:
+    # Use a path relative to this file: ../data/sqlite/chatbot.db
+    _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    DB_PATH = os.path.join(_BASE_DIR, "data", "sqlite", "chatbot.db")
 
 
 SCHEMA_SQL = """
