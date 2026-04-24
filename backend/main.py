@@ -337,11 +337,34 @@ def chat(req: ChatRequest, request: Request):
     if not ip_limiter.is_allowed(f"ip:{ip}"):
         raise HTTPException(status_code=429, detail="Too many requests. Please try again later.")
     dept = None if req.department == "all" else req.department
+    
+    # 1. Save user message to history
+    if req.session_id:
+        try:
+            add_message(req.session_id, "user", cleaned_question.strip())
+        except Exception as e:
+            print(f"[Chat] Warning: could not save user message: {e}")
+
+    # 2. Run RAG Pipeline
     result = rag_query(
         question=cleaned_question.strip(),
         session_id=req.session_id,
         department=dept
     )
+
+    # 3. Save assistant message to history
+    if req.session_id:
+        try:
+            add_message(
+                req.session_id, 
+                "assistant", 
+                result["answer"], 
+                sources=result["sources"],
+                rewritten_query=result["rewritten_query"]
+            )
+        except Exception as e:
+            print(f"[Chat] Warning: could not save assistant message: {e}")
+
     return result
 
 

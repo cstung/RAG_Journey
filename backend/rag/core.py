@@ -114,16 +114,19 @@ def rewrite_query(question: str, history: list[dict] | None = None) -> str:
     Rewrite query in Vietnamese for accurate document search.
     Documents are in Vietnamese regardless of what language the user asked in.
     """
+    # Only use the last 3 USER messages for entity resolution.
+    # This prevents 'topic drift' while still allowing pronoun resolution.
+    user_messages = [m for m in (history or []) if m.get("role") == "user"][-3:]
+    
     history_lines: list[str] = []
-    for message in (history or []):
-        role = (message.get("role") or "").strip().lower()
-        if role not in ("user", "assistant"):
-            continue
-        history_lines.append(f"{role.upper()}: {str(message.get('content', '')).strip()}")
+    for message in user_messages:
+        content = str(message.get("content", "")).strip()
+        if content:
+            history_lines.append(f"USER: {content}")
 
     history_block = ""
     if history_lines:
-        history_block = "Conversation history:\n" + "\n".join(history_lines) + "\n\n"
+        history_block = "Recent context (for pronoun resolution only):\n" + "\n".join(history_lines) + "\n\n"
 
     resp = client.chat.completions.create(
         model=LLM_MODEL,
@@ -131,11 +134,11 @@ def rewrite_query(question: str, history: list[dict] | None = None) -> str:
             "role": "user",
             "content": (
                 "You are a search query optimizer for a Vietnamese internal document system.\n"
-                "Rewrite the following question as a Vietnamese search query with relevant keywords.\n"
-                "Use the conversation history only to resolve references such as pronouns or omitted entities.\n"
-                "Output ONLY the rewritten query in Vietnamese, nothing else.\n\n"
+                "Your goal is to rewrite the current question into a keyword-rich Vietnamese search query.\n"
+                "Use the provided context ONLY to resolve pronouns (e.g., 'him', 'it', 'that law') or omitted subjects.\n"
+                "If the question is already clear, output it exactly as is.\n\n"
                 f"{history_block}"
-                f"Question: {question}\n"
+                f"Current Question: {question}\n"
                 "Vietnamese search query:"
             ),
         }],
@@ -145,66 +148,57 @@ def rewrite_query(question: str, history: list[dict] | None = None) -> str:
     return resp.choices[0].message.content.strip()
 
 
-def _distance_to_similarity(distance: float | None) -> float:
-    """
-    Chroma returns distances; for cosine distance it's typically (1 - cosine_similarity).
-    Convert to a similarity-like score for thresholding.
-    """
-    try:
-        d = float(distance)
-    except Exception:
-        return 0.0
-    sim = 1.0 - d
-    if sim < 0.0:
-        return 0.0
-    if sim > 1.0:
-        return 1.0
-    return sim
+def detect_domain(question: str) -> str | None:
+    """Classifies the user question into a specific domain for scoped retrieval."""
+    q = question.lower()
+    # Keyword based fast-path
+    if any(k in q for k in ["lao động", "nghỉ việc", "lương", "hợp đồng", "labour", "người lao động"]):
+        return "lao_dong"
+    if any(k in q for k in ["giao thông", "đèn đỏ", "xe máy", "ô tô", "nồng độ cồn", "traffic"]):
+        return "giao_thong"
+    if any(k in q for k in ["doanh nghiệp", "vốn", "cổ đông", "điều lệ", "enterprise"]):
+        return "doanh_nghiep"
+    
+    # Optional: LLM based classifier if keywords miss
+    return None
 
 
-def vector_search(query_text: str, n: int, department: str = None) -> tuple[list[str], list[str], list[float]]:
+def vector_search(query_text: str, n: int, department: str = None, domain: str = None) -> tuple[list[str], list[str], list[float]]:
     total = collection.count()
     if total == 0:
         return [], [], []
 
+    # Build the 'where' filter
+    filters = {}
+    if department and department != "all":
+        filters["department"] = department
+    if domain:
+        filters["domain"] = domain
+    
     kwargs = {
         "query_embeddings": [get_embedding(query_text)],
         "n_results": min(n, total),
         "include": ["documents", "metadatas", "distances"],
     }
+    
+    if len(filters) > 1:
+        kwargs["where"] = {"$and": [{k: v} for k, v in filters.items()]}
+    elif len(filters) == 1:
+        kwargs["where"] = filters
 
-    if department and department != "all":
-        kwargs["where"] = {"department": department}
-        try:
-            result = collection.query(**kwargs)
-            ids = result.get("ids", [[]])[0]
-            docs = result.get("documents", [[]])[0]
-            dists = result.get("distances", [[]])[0]
-            sims = [_distance_to_similarity(d) for d in dists]
-            return ids, docs, sims
-        except Exception as exc:
-            print(f"[RAG] Vector search retry for department {department}: {exc}")
-            try:
-                all_dept = collection.get(where={"department": department}, include=[])
-                count = len(all_dept["ids"])
-                if count == 0:
-                    return [], [], []
-                kwargs["n_results"] = min(n, count)
-                result = collection.query(**kwargs)
-                ids = result.get("ids", [[]])[0]
-                docs = result.get("documents", [[]])[0]
-                dists = result.get("distances", [[]])[0]
-                sims = [_distance_to_similarity(d) for d in dists]
-                return ids, docs, sims
-            except Exception:
-                return [], [], []
-
-    result = collection.query(**kwargs)
-    ids = result.get("ids", [[]])[0]
-    docs = result.get("documents", [[]])[0]
-    dists = result.get("distances", [[]])[0]
-    sims = [_distance_to_similarity(d) for d in dists]
-    return ids, docs, sims
+    try:
+        result = collection.query(**kwargs)
+        ids = result.get("ids", [[]])[0]
+        docs = result.get("documents", [[]])[0]
+        dists = result.get("distances", [[]])[0]
+        sims = [_distance_to_similarity(d) for d in dists]
+        return ids, docs, sims
+    except Exception as exc:
+        print(f"[RAG] Vector search error with filters {filters}: {exc}")
+        # Fallback: try without domain filter if it failed
+        if domain:
+            return vector_search(query_text, n, department, domain=None)
+        return [], [], []
 
 
 def rrf_merge(vec_ids: list[str], bm25_ids: list[str], k: int = 60) -> list[str]:
@@ -236,7 +230,12 @@ def query(question: str, session_id: str = None, department: str = None) -> dict
     rewritten = rewrite_query(question, history=history)
     print(f"[RAG] Q: {question!r} -> {rewritten!r}")
 
-    vec_ids, vec_docs, vec_sims = vector_search(rewritten, RETRIEVE_N, department)
+    # Detect domain from query or rewritten query
+    detected_domain = detect_domain(rewritten)
+    if detected_domain:
+        print(f"[RAG] Explicit domain scoping triggered: {detected_domain}")
+
+    vec_ids, vec_docs, vec_sims = vector_search(rewritten, RETRIEVE_N, department, domain=detected_domain)
     bm25_hits = _idx.search(rewritten, RETRIEVE_N, department)
     bm25_ids = [hit[0] for hit in bm25_hits]
 
@@ -252,39 +251,56 @@ def query(question: str, session_id: str = None, department: str = None) -> dict
     gated_bm25_ids = [hit[0] for hit in bm25_hits if hit[2] >= BM25_MIN_SCORE]
 
     if not gated_vec_ids and not gated_bm25_ids:
-        context = NO_RESULTS_SENTINEL
-        available_sources = []
-        relevant = []
-    else:
-        # Merge results (RRF handles ranking across sources)
-        merged_ids = rrf_merge(gated_vec_ids, gated_bm25_ids)[:TOP_K]
-        relevant = []
-        for item_id in merged_ids:
-            text = _idx.get_text(item_id)
-            meta = _idx.get_meta(item_id)
-            if text and meta:
-                relevant.append((text, meta))
+        # --- EARLY EXIT: Stricter Abstention ---
+        # If both channels are weak, skip LLM call to prevent hallucinations
+        print(f"[RAG] Early exit: No documents passed gates. Returning abstention.")
+        return {
+            "answer": NO_MATCH_MESSAGES.get(detected_lang, NO_MATCH_MESSAGES["vi"]),
+            "sources": [],
+            "confidence": "THẤP",
+            "citation_valid": False,
+            "rewritten_query": rewritten,
+            "detected_lang": detected_lang,
+        }
+    
+    # Merge results (RRF handles ranking across sources)
+    merged_ids = rrf_merge(gated_vec_ids, gated_bm25_ids)[:TOP_K]
+    relevant = []
+    for item_id in merged_ids:
+        text = _idx.get_text(item_id)
+        meta = _idx.get_meta(item_id)
+        if text and meta:
+            relevant.append((text, meta))
 
-        if not relevant:
-            context = NO_RESULTS_SENTINEL
-            available_sources = []
-        else:
-            source_counts: dict[str, int] = {}
-            for _, meta in relevant:
-                filename = meta.get("filename", "?")
-                source_counts[filename] = source_counts.get(filename, 0) + 1
-            print(f"[RAG] Retrieved {len(relevant)} chunks from {len(source_counts)} files: {source_counts}")
+    if not relevant:
+        # --- EARLY EXIT: Empty relevant list ---
+        print(f"[RAG] Early exit: No relevant chunks found after merging.")
+        return {
+            "answer": NO_MATCH_MESSAGES.get(detected_lang, NO_MATCH_MESSAGES["vi"]),
+            "sources": [],
+            "confidence": "THẤP",
+            "citation_valid": False,
+            "rewritten_query": rewritten,
+            "detected_lang": detected_lang,
+        }
 
-            available_sources = list({meta.get("filename", "?") for _, meta in relevant})
-            context = "\n\n---\n\n".join(
-                f"[{meta.get('department', '?')} | {meta.get('filename', '?')} | Trang {meta.get('page', '?')}]\n{sanitise_chunk(text)}"
-                for text, meta in relevant
-            )
+    # If we got here, we have context. Build the sources and context block.
+    source_counts: dict[str, int] = {}
+    for _, meta in relevant:
+        filename = meta.get("filename", "?")
+        source_counts[filename] = source_counts.get(filename, 0) + 1
+    print(f"[RAG] Retrieved {len(relevant)} chunks from {len(source_counts)} files: {source_counts}")
+
+    available_sources = list({meta.get("filename", "?") for _, meta in relevant})
+    context = "\n\n---\n\n".join(
+        f"[{meta.get('department', '?')} | {meta.get('filename', '?')} | Trang {meta.get('page', '?')}]\n{sanitise_chunk(text)}"
+        for text, meta in relevant
+    )
 
     resp = client.chat.completions.create(
         model=LLM_MODEL,
         messages=build_prompt(context=context, question=question, history=history),
-        temperature=0.3, # Increased from 0.1 for more natural responses
+        temperature=0.0, # Hyper-strict groundedness
         max_tokens=1000,
     )
 

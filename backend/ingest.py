@@ -23,7 +23,7 @@ def count_tokens(text: str) -> int:
     return len(encoder.encode(text))
 
 
-def _make_chunk(text, file_id, page, idx, department, category, filename, document_id=None, version=None):
+def _make_chunk(text, file_id, page, idx, department, category, domain, filename, document_id=None, version=None):
     chunk_id = hashlib.md5(f"{file_id}_p{page}_c{idx}".encode()).hexdigest()
     return {
         "id": chunk_id,
@@ -35,25 +35,26 @@ def _make_chunk(text, file_id, page, idx, department, category, filename, docume
             "chunk_idx":  idx,
             "department": department,
             "category":   category,
+            "domain":     domain, # New explicit domain scoping
             "document_id": document_id,
             "doc_version": version,
         }
     }
 
 
-def _split_by_tokens(text, file_id, page, start_idx, department, category, filename, document_id=None, version=None):
+def _split_by_tokens(text, file_id, page, start_idx, department, category, domain, filename, document_id=None, version=None):
     tokens = encoder.encode(text)
     chunks, pos, idx = [], 0, start_idx
     while pos < len(tokens):
         end = min(pos + MAX_CHUNK_TOKENS, len(tokens))
         chunks.append(_make_chunk(encoder.decode(tokens[pos:end]),
-                                  file_id, page, idx, department, category, filename, document_id, version))
+                                  file_id, page, idx, department, category, domain, filename, document_id, version))
         pos += MAX_CHUNK_TOKENS - OVERLAP_TOKENS
         idx += 1
     return chunks
 
 
-def structural_chunk(text, file_id, page, department, category, filename, document_id=None, version=None):
+def structural_chunk(text, file_id, page, department, category, domain, filename, document_id=None, version=None):
     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
     chunks, buffer, buffer_tokens, chunk_idx = [], "", 0, 0
 
@@ -61,14 +62,14 @@ def structural_chunk(text, file_id, page, department, category, filename, docume
         pt = count_tokens(para)
         if pt > MAX_CHUNK_TOKENS:
             if buffer and buffer_tokens >= MIN_CHUNK_TOKENS:
-                chunks.append(_make_chunk(buffer, file_id, page, chunk_idx, department, category, filename, document_id, version))
+                chunks.append(_make_chunk(buffer, file_id, page, chunk_idx, department, category, domain, filename, document_id, version))
                 chunk_idx += 1
                 buffer, buffer_tokens = "", 0
-            sub = _split_by_tokens(para, file_id, page, chunk_idx, department, category, filename, document_id, version)
+            sub = _split_by_tokens(para, file_id, page, chunk_idx, department, category, domain, filename, document_id, version)
             chunks.extend(sub); chunk_idx += len(sub)
         elif buffer_tokens + pt > MAX_CHUNK_TOKENS:
             if buffer_tokens >= MIN_CHUNK_TOKENS:
-                chunks.append(_make_chunk(buffer, file_id, page, chunk_idx, department, category, filename, document_id, version))
+                chunks.append(_make_chunk(buffer, file_id, page, chunk_idx, department, category, domain, filename, document_id, version))
                 chunk_idx += 1
             buffer, buffer_tokens = para, pt
         else:
@@ -76,7 +77,7 @@ def structural_chunk(text, file_id, page, department, category, filename, docume
             buffer_tokens += pt
 
     if buffer and buffer_tokens >= MIN_CHUNK_TOKENS:
-        chunks.append(_make_chunk(buffer, file_id, page, chunk_idx, department, category, filename, document_id, version))
+        chunks.append(_make_chunk(buffer, file_id, page, chunk_idx, department, category, domain, filename, document_id, version))
     return chunks
 
 
@@ -100,9 +101,9 @@ def ocr_pdf(filepath: str, file_id: str, department: str, category: str, filenam
             
             # Since OCR loses page-level structure often, we treat each page as a single chunk 
             # or run structural chunking if text is long.
-            chunks = structural_chunk(text, file_id, i, department, category, filename, document_id, version)
+            chunks = structural_chunk(text, file_id, i, department, category, domain, filename, document_id, version)
             if not chunks and len(text) >= 10:
-                chunks = [_make_chunk(text, file_id, i, 0, department, category, filename, document_id, version)]
+                chunks = [_make_chunk(text, file_id, i, 0, department, category, domain, filename, document_id, version)]
             all_chunks.extend(chunks)
         
         print(f"    [OCR] Completed: {len(all_chunks)} chunks found.")
@@ -112,16 +113,31 @@ def ocr_pdf(filepath: str, file_id: str, department: str, category: str, filenam
         return []
 
 
-def detect_department_category(filepath: str) -> tuple[str, str]:
+def detect_metadata(filepath: str) -> tuple[str, str, str]:
+    """Detects department, category, and domain from file path."""
     parts = filepath.replace("\\", "/").split("/")
     try:
         docs_idx = next(i for i, p in enumerate(parts) if p == "docs")
     except StopIteration:
-        return "General", "general"
+        return "General", "general", "internal"
+    
     rel = parts[docs_idx + 1:]
-    if len(rel) == 1: return "General", "general"
-    if len(rel) == 2: return rel[0], "general"
-    return rel[0], rel[1]
+    dept = rel[0] if len(rel) > 0 else "General"
+    cat = rel[1] if len(rel) > 1 else "general"
+    
+    # Domain detection based on keywords
+    domain = "internal"
+    fn = os.path.basename(filepath).lower()
+    if "lao-dong" in fn or "lao_dong" in fn or "labour" in fn:
+        domain = "lao_dong"
+    elif "giao-thong" in fn or "giao_thong" in fn or "traffic" in fn:
+        domain = "giao_thong"
+    elif "doanh-nghiep" in fn or "enterprise" in fn:
+        domain = "doanh_nghiep"
+    elif "phap-ly" in dept.lower() or "legal" in dept.lower():
+        domain = "legal"
+        
+    return dept, cat, domain
 
 
 def ingest_pdf(filepath: str, department: str = None, category: str = None, document_id=None, version=None) -> int:
@@ -134,10 +150,15 @@ def ingest_pdf(filepath: str, department: str = None, category: str = None, docu
 
     filename = os.path.basename(filepath)
     if department is None or category is None:
-        d, c = detect_department_category(filepath)
+        d, c, dom = detect_metadata(filepath)
         department = department or d
         category   = category   or c
-    print(f"  [Ingest] Processing: {file_id} ({department}/{category}) v{version if version is not None else '?'}")
+        domain     = dom
+    else:
+        # If forced, we still try to detect domain
+        _, _, domain = detect_metadata(filepath)
+
+    print(f"  [Ingest] Processing: {file_id} ({department}/{category}/{domain}) v{version if version is not None else '?'}")
     
     if not os.path.exists(filepath):
         print(f"  ERROR: File not found at {filepath}")
@@ -169,9 +190,9 @@ def ingest_pdf(filepath: str, department: str = None, category: str = None, docu
         if len(text) < 5: 
             continue
         
-        chunks = structural_chunk(text, file_id, page_num, department, category, filename, document_id, version)
+        chunks = structural_chunk(text, file_id, page_num, department, category, domain, filename, document_id, version)
         if not chunks and len(text) >= 5:
-            chunks = [_make_chunk(text, file_id, page_num, 0, department, category, filename, document_id, version)]
+            chunks = [_make_chunk(text, file_id, page_num, 0, department, category, domain, filename, document_id, version)]
             
         all_chunks.extend(chunks)
 
@@ -252,6 +273,7 @@ def ingest_text(
     filepath: str,
     department: str,
     category: str,
+    domain: str,
     document_id=None,
     version=None,
     source_url: str | None = None,
@@ -273,12 +295,13 @@ def ingest_text(
         page=1,
         department=department,
         category=category,
+        domain=domain,
         filename=filename,
         document_id=document_id,
         version=version,
     )
     if not chunks:
-        chunks = [_make_chunk(text.strip(), file_id, 1, 0, department, category, filename, document_id, version)]
+        chunks = [_make_chunk(text.strip(), file_id, 1, 0, department, category, domain, filename, document_id, version)]
 
     # Optionally stamp source URL into metadata (for crawled docs)
     if source_url:
@@ -317,18 +340,21 @@ def ingest_docx(filepath: str, department: str = None, category: str = None, doc
 
     filename = os.path.basename(filepath)
     if department is None or category is None:
-        d, c = detect_department_category(filepath)
+        d, c, dom = detect_metadata(filepath)
         department = department or d
         category = category or c
+        domain = dom
+    else:
+        _, _, domain = detect_metadata(filepath)
 
-    print(f"  [Ingest] Processing DOCX: {filename} ({department}/{category}) v{version if version is not None else '?'}")
+    print(f"  [Ingest] Processing DOCX: {filename} ({department}/{category}/{domain}) v{version if version is not None else '?'}")
     try:
         text = extract_docx_text(filepath)
     except Exception as e:
         print(f"  ERROR parsing DOCX {filepath}: {e}")
         return 0
 
-    return ingest_text(text, filepath, department, category, document_id=document_id, version=version)
+    return ingest_text(text, filepath, department, category, domain, document_id=document_id, version=version)
 
 
 def ingest_doc(filepath: str, department: str = None, category: str = None, document_id=None, version=None) -> int:
@@ -338,11 +364,14 @@ def ingest_doc(filepath: str, department: str = None, category: str = None, docu
 
     filename = os.path.basename(filepath)
     if department is None or category is None:
-        d, c = detect_department_category(filepath)
+        d, c, dom = detect_metadata(filepath)
         department = department or d
         category = category or c
+        domain = dom
+    else:
+        _, _, domain = detect_metadata(filepath)
 
-    print(f"  [Ingest] Processing DOC: {filename} ({department}/{category}) v{version if version is not None else '?'}")
+    print(f"  [Ingest] Processing DOC: {filename} ({department}/{category}/{domain}) v{version if version is not None else '?'}")
     try:
         # Use antiword to extract text from legacy .doc files
         res = subprocess.run(["antiword", filepath], capture_output=True, text=True, check=True)
@@ -351,7 +380,7 @@ def ingest_doc(filepath: str, department: str = None, category: str = None, docu
         print(f"  ERROR parsing DOC {filepath}: {e}")
         return 0
 
-    return ingest_text(text, filepath, department, category, document_id=document_id, version=version)
+    return ingest_text(text, filepath, department, category, domain, document_id=document_id, version=version)
 
 
 def ingest_txt(filepath: str, department: str = None, category: str = None, document_id=None, version=None) -> int:
@@ -361,11 +390,14 @@ def ingest_txt(filepath: str, department: str = None, category: str = None, docu
 
     filename = os.path.basename(filepath)
     if department is None or category is None:
-        d, c = detect_department_category(filepath)
+        d, c, dom = detect_metadata(filepath)
         department = department or d
         category = category or c
+        domain = dom
+    else:
+        _, _, domain = detect_metadata(filepath)
 
-    print(f"  [Ingest] Processing TXT: {filename} ({department}/{category}) v{version if version is not None else '?'}")
+    print(f"  [Ingest] Processing TXT: {filename} ({department}/{category}/{domain}) v{version if version is not None else '?'}")
     try:
         with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
             text = f.read()
@@ -373,7 +405,7 @@ def ingest_txt(filepath: str, department: str = None, category: str = None, docu
         print(f"  ERROR reading TXT {filepath}: {e}")
         return 0
 
-    return ingest_text(text, filepath, department, category, document_id=document_id, version=version)
+    return ingest_text(text, filepath, department, category, domain, document_id=document_id, version=version)
 
 
 def ingest_html(filepath: str, department: str = None, category: str = None, document_id=None, version=None) -> int:
@@ -383,11 +415,14 @@ def ingest_html(filepath: str, department: str = None, category: str = None, doc
 
     filename = os.path.basename(filepath)
     if department is None or category is None:
-        d, c = detect_department_category(filepath)
+        d, c, dom = detect_metadata(filepath)
         department = department or d
         category = category or c
+        domain = dom
+    else:
+        _, _, domain = detect_metadata(filepath)
 
-    print(f"  [Ingest] Processing HTML: {filename} ({department}/{category}) v{version if version is not None else '?'}")
+    print(f"  [Ingest] Processing HTML: {filename} ({department}/{category}/{domain}) v{version if version is not None else '?'}")
     try:
         with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
             html = f.read()
@@ -396,7 +431,7 @@ def ingest_html(filepath: str, department: str = None, category: str = None, doc
         print(f"  ERROR reading HTML {filepath}: {e}")
         return 0
 
-    return ingest_text(text, filepath, department, category, document_id=document_id, version=version)
+    return ingest_text(text, filepath, department, category, domain, document_id=document_id, version=version)
 
 
 def ingest_file(filepath: str, department: str = None, category: str = None, document_id=None, version=None) -> int:
