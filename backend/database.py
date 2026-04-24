@@ -168,6 +168,19 @@ def end_session(session_id: str) -> None:
         conn.close()
 
 
+def update_session_lang(session_id: str, lang: str) -> None:
+    """Update the detected language for a session."""
+    conn = get_db()
+    try:
+        conn.execute(
+            "UPDATE sessions SET user_lang = ? WHERE id = ?",
+            ((lang or "vi").strip(), session_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def session_exists(session_id: str) -> bool:
     if not session_id:
         return False

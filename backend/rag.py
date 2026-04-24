@@ -1,23 +1,38 @@
 import os
+
 from openai import OpenAI
 from rank_bm25 import BM25Okapi
-from db import collection
 
-client       = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-COMPANY_NAME = os.getenv("COMPANY_NAME", "công ty")
-LLM_MODEL    = os.getenv("LLM_MODEL", "gpt-4o-mini")
-TOP_K        = int(os.getenv("TOP_K", "6"))
-RETRIEVE_N   = 15
-HISTORY_MAX  = 8
+from database import update_session_lang
+from db import collection
+from language import detect_language, get_system_prompt
+
+
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+COMPANY_NAME = os.getenv("COMPANY_NAME", "cong ty")
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
+TOP_K = int(os.getenv("TOP_K", "6"))
+RETRIEVE_N = 15
+HISTORY_MAX = 8
 HISTORY_CHARS_PER_MSG = 800
 
+NO_DOCS_MESSAGES = {
+    "vi": "Chua co tai lieu nao. Vui long upload tai lieu truoc.",
+    "ko": "아직 업로드된 문서가 없습니다. 먼저 문서를 업로드해 주세요.",
+    "en": "There are no documents yet. Please upload documents first.",
+}
 
-# ── BM25 Index ─────────────────────────────────────────────────────────────
+NO_MATCH_MESSAGES = {
+    "vi": "Toi chua co thong tin ve van de nay.",
+    "ko": "해당 사항에 대한 정보가 없습니다.",
+    "en": "I don't have information on this topic.",
+}
+
 
 class BM25Index:
     def __init__(self):
-        self.ids:   list[str]  = []
-        self.texts: list[str]  = []
+        self.ids: list[str] = []
+        self.texts: list[str] = []
         self.metas: list[dict] = []
         self.bm25: BM25Okapi | None = None
         self.build()
@@ -26,52 +41,46 @@ class BM25Index:
         return text.lower().split()
 
     def build(self):
-        # Explicitly fetch ALL chunks — no implicit limit
-        results = collection.get(
-            limit=200_000,
-            include=["documents", "metadatas"]
-        )
+        results = collection.get(limit=200_000, include=["documents", "metadatas"])
         if not results["ids"]:
             self.bm25 = None
             self.ids, self.texts, self.metas = [], [], []
             print("[BM25] No documents in DB yet. Index cleared.")
             return
 
-        self.ids   = results["ids"]
+        self.ids = results["ids"]
         self.texts = results["documents"]
         self.metas = results["metadatas"]
-        self.bm25  = BM25Okapi([self._tok(t) for t in self.texts])
+        self.bm25 = BM25Okapi([self._tok(text) for text in self.texts])
         print(f"[BM25] Rebuilt: {len(self.ids)} chunks from {len(self.departments())} departments")
 
     def search(self, query: str, n: int, department: str = None) -> list[tuple]:
         if not self.bm25 or not self.ids:
             return []
+
         scores = self.bm25.get_scores(self._tok(query))
-        items  = list(zip(self.ids, self.metas, scores))
-        # Filter by department if needed
+        items = list(zip(self.ids, self.metas, scores))
         if department and department != "all":
-            items = [(id_, m, s) for id_, m, s in items if m.get("department") == department]
-        
-        # Filter out 0-score items to prevent irrelevant 'first chunks' from dominating
-        items = [it for it in items if it[2] > 0]
-        
-        items.sort(key=lambda x: x[2], reverse=True)
+            items = [(item_id, meta, score) for item_id, meta, score in items if meta.get("department") == department]
+
+        items = [item for item in items if item[2] > 0]
+        items.sort(key=lambda item: item[2], reverse=True)
         return items[:n]
 
-    def get_text(self, id_: str) -> str:
+    def get_text(self, item_id: str) -> str:
         try:
-            return self.texts[self.ids.index(id_)]
+            return self.texts[self.ids.index(item_id)]
         except ValueError:
             return ""
 
-    def get_meta(self, id_: str) -> dict:
+    def get_meta(self, item_id: str) -> dict:
         try:
-            return self.metas[self.ids.index(id_)]
+            return self.metas[self.ids.index(item_id)]
         except ValueError:
             return {}
 
     def departments(self) -> list[str]:
-        return sorted({m.get("department", "General") for m in self.metas})
+        return sorted({meta.get("department", "General") for meta in self.metas})
 
 
 _idx = BM25Index()
@@ -85,162 +94,178 @@ def get_departments() -> list[str]:
     return _idx.departments()
 
 
-# ── Core functions ─────────────────────────────────────────────────────────
-
 def get_embedding(text: str) -> list[float]:
-    return client.embeddings.create(
-        model="text-embedding-3-small", input=text[:8000]
-    ).data[0].embedding
+    return client.embeddings.create(model="text-embedding-3-small", input=text[:8000]).data[0].embedding
 
 
 def _trim(text: str, n: int) -> str:
     text = (text or "").strip()
     if len(text) <= n:
         return text
-    return text[:n].rstrip() + "…"
+    return text[:n].rstrip() + "..."
 
 
 def _history_for_llm(history: list[dict] | None) -> list[dict]:
     if not history:
         return []
+
     out: list[dict] = []
-    for m in history[-HISTORY_MAX:]:
-        role = (m.get("role") or "").strip().lower()
+    for message in history[-HISTORY_MAX:]:
+        role = (message.get("role") or "").strip().lower()
         if role not in ("user", "assistant"):
             continue
-        out.append({"role": role, "content": _trim(str(m.get("content", "")), HISTORY_CHARS_PER_MSG)})
+        out.append(
+            {
+                "role": role,
+                "content": _trim(str(message.get("content", "")), HISTORY_CHARS_PER_MSG),
+            }
+        )
     return out
 
 
 def rewrite_query(question: str, history: list[dict] | None = None) -> str:
     hist = _history_for_llm(history)
     convo = "\n".join(
-        ("User: " if m["role"] == "user" else "Assistant: ") + m["content"]
-        for m in hist
+        ("User: " if message["role"] == "user" else "Assistant: ") + message["content"]
+        for message in hist
     ).strip()
 
-    resp = client.chat.completions.create(
+    response = client.chat.completions.create(
         model=LLM_MODEL,
-        messages=[{"role": "user", "content": (
-            "Bạn là trợ lý tìm kiếm tài liệu nội bộ công ty.\n"
-            "Viết lại câu hỏi sau thành câu tìm kiếm đầy đủ hơn, thêm từ khóa liên quan.\n"
-            "Chỉ trả về câu tìm kiếm, không giải thích.\n\n"
-            + (f"CONVERSATION CONTEXT:\n{convo}\n\n" if convo else "")
-            + f"Câu hỏi: {question}\nCâu tìm kiếm:"
-        )}],
-        temperature=0, max_tokens=120
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    "Ban la tro ly tim kiem tai lieu noi bo cong ty.\n"
+                    "Viet lai cau hoi sau thanh cau tim kiem day du hon, them tu khoa lien quan.\n"
+                    "Chi tra ve cau tim kiem, khong giai thich.\n\n"
+                    + (f"CONVERSATION CONTEXT:\n{convo}\n\n" if convo else "")
+                    + f"Cau hoi: {question}\nCau tim kiem:"
+                ),
+            }
+        ],
+        temperature=0,
+        max_tokens=120,
     )
-    return resp.choices[0].message.content.strip()
+    return (response.choices[0].message.content or "").strip()
 
 
 def vector_search(query_text: str, n: int, department: str = None) -> list[str]:
     total = collection.count()
     if total == 0:
         return []
-    
-    kwargs = dict(
-        query_embeddings=[get_embedding(query_text)],
-        n_results=min(n, total),
-        include=["metadatas"]
-    )
-    
+
+    kwargs = {
+        "query_embeddings": [get_embedding(query_text)],
+        "n_results": min(n, total),
+        "include": ["metadatas"],
+    }
+
     if department and department != "all":
         kwargs["where"] = {"department": department}
-        # ChromaDB might error if n_results > number of matching documents
-        # We'll try to get as many as possible
         try:
-            res = collection.query(**kwargs)
-            return res["ids"][0]
-        except Exception as e:
-            print(f"[RAG] Vector search retry for department {department}: {e}")
-            # Fallback: get all IDs for this department and then use a safe n_results
+            result = collection.query(**kwargs)
+            return result["ids"][0]
+        except Exception as exc:
+            print(f"[RAG] Vector search retry for department {department}: {exc}")
             try:
                 all_dept = collection.get(where={"department": department}, include=[])
                 count = len(all_dept["ids"])
-                if count == 0: return []
+                if count == 0:
+                    return []
                 kwargs["n_results"] = min(n, count)
-                res = collection.query(**kwargs)
-                return res["ids"][0]
+                result = collection.query(**kwargs)
+                return result["ids"][0]
             except Exception:
                 return []
-    
-    res = collection.query(**kwargs)
-    return res["ids"][0]
+
+    result = collection.query(**kwargs)
+    return result["ids"][0]
 
 
 def rrf_merge(vec_ids: list[str], bm25_ids: list[str], k: int = 60) -> list[str]:
     scores: dict[str, float] = {}
-    for rank, id_ in enumerate(vec_ids):
-        scores[id_] = scores.get(id_, 0) + 1 / (k + rank + 1)
-    for rank, id_ in enumerate(bm25_ids):
-        scores[id_] = scores.get(id_, 0) + 1 / (k + rank + 1)
-    return sorted(scores, key=lambda x: scores[x], reverse=True)
+    for rank, item_id in enumerate(vec_ids):
+        scores[item_id] = scores.get(item_id, 0) + 1 / (k + rank + 1)
+    for rank, item_id in enumerate(bm25_ids):
+        scores[item_id] = scores.get(item_id, 0) + 1 / (k + rank + 1)
+    return sorted(scores, key=lambda item_id: scores[item_id], reverse=True)
 
 
-# ── Main query ─────────────────────────────────────────────────────────────
+def query(
+    question: str,
+    session_id: str | None = None,
+    department: str = None,
+    history: list[dict] | None = None,
+) -> dict:
+    detected_lang = detect_language(question)
+    system_prompt = get_system_prompt(detected_lang, COMPANY_NAME)
+    if session_id:
+        update_session_lang(session_id, detected_lang)
 
-def query(question: str, department: str = None, history: list[dict] | None = None) -> dict:
     total = collection.count()
     print(f"[RAG] Total chunks in DB: {total} | BM25 index size: {len(_idx.ids)}")
 
     if total == 0:
-        return {"answer": "Chưa có tài liệu nào. Vui lòng upload tài liệu trước.",
-                "sources": [], "rewritten_query": question}
+        return {
+            "answer": NO_DOCS_MESSAGES.get(detected_lang, NO_DOCS_MESSAGES["vi"]),
+            "sources": [],
+            "rewritten_query": question,
+            "detected_lang": detected_lang,
+        }
 
-    rewritten  = rewrite_query(question, history=history)
-    print(f"[RAG] Q: {question!r} → {rewritten!r}")
+    rewritten = rewrite_query(question, history=history)
+    print(f"[RAG] Q: {question!r} -> {rewritten!r}")
 
-    vec_ids   = vector_search(rewritten, RETRIEVE_N, department)
+    vec_ids = vector_search(rewritten, RETRIEVE_N, department)
     bm25_hits = _idx.search(rewritten, RETRIEVE_N, department)
-    bm25_ids  = [h[0] for h in bm25_hits]
+    bm25_ids = [hit[0] for hit in bm25_hits]
 
     print(f"[RAG] Vector hits: {len(vec_ids)} | BM25 hits: {len(bm25_ids)}")
 
     merged_ids = rrf_merge(vec_ids, bm25_ids)[:TOP_K]
-    relevant   = []
-    for id_ in merged_ids:
-        t = _idx.get_text(id_)
-        m = _idx.get_meta(id_)
-        if t and m:
-            relevant.append((t, m))
+    relevant = []
+    for item_id in merged_ids:
+        text = _idx.get_text(item_id)
+        meta = _idx.get_meta(item_id)
+        if text and meta:
+            relevant.append((text, meta))
 
     if not relevant:
-        return {"answer": "Không tìm thấy thông tin liên quan trong tài liệu nội bộ.",
-                "sources": [], "rewritten_query": rewritten}
+        return {
+            "answer": NO_MATCH_MESSAGES.get(detected_lang, NO_MATCH_MESSAGES["vi"]),
+            "sources": [],
+            "rewritten_query": rewritten,
+            "detected_lang": detected_lang,
+        }
 
-    # Log source diversity
     source_counts = {}
-    for _, m in relevant:
-        fname = m.get("filename", "?")
-        source_counts[fname] = source_counts.get(fname, 0) + 1
+    for _, meta in relevant:
+        filename = meta.get("filename", "?")
+        source_counts[filename] = source_counts.get(filename, 0) + 1
     print(f"[RAG] Retrieved {len(relevant)} chunks from {len(source_counts)} files: {source_counts}")
 
     context = "\n\n---\n\n".join(
-        f"[{m.get('department','?')} | {m.get('filename','?')} | Trang {m.get('page','?')}]\n{d}"
-        for d, m in relevant
+        f"[{meta.get('department', '?')} | {meta.get('filename', '?')} | Trang {meta.get('page', '?')}]\n{text}"
+        for text, meta in relevant
     )
 
     hist_msgs = _history_for_llm(history)
 
-    resp = client.chat.completions.create(
+    response = client.chat.completions.create(
         model=LLM_MODEL,
         messages=[
-            {"role": "system", "content": (
-                f"Bạn là trợ lý nội bộ chuyên tra cứu tài liệu của {COMPANY_NAME}.\n\n"
-                "QUY TẮC BẮT BUỘC:\n"
-                "1. CHỈ trả lời dựa trên phần 'TÀI LIỆU' được cung cấp bên dưới.\n"
-                "2. Nếu thông tin KHÔNG có trong tài liệu, hãy trả lời: 'Tôi không tìm thấy thông tin này trong tài liệu nội bộ.' Tuyệt đối không tự bịa ra câu trả lời hoặc dùng kiến thức bên ngoài.\n"
-                "3. Luôn trích dẫn tên tài liệu ở cuối câu trả lời nếu có thông tin (ví dụ: [Nguồn: file_name.pdf]).\n"
-                "4. Trả lời bằng tiếng Việt, ngắn gọn, trung thực và chuyên nghiệp."
-            )},
+            {"role": "system", "content": system_prompt},
             *hist_msgs,
-            {"role": "user", "content": f"TÀI LIỆU:\n{context}\n\nCÂU HỎI: {question}"}
+            {"role": "user", "content": f"TAI LIEU:\n{context}\n\nCAU HOI: {question}"},
         ],
-        temperature=0.0, max_tokens=1000
+        temperature=0.0,
+        max_tokens=1000,
     )
 
     return {
-        "answer":          resp.choices[0].message.content,
-        "sources":         list({m.get("filename","?") for _, m in relevant}),
+        "answer": response.choices[0].message.content,
+        "sources": list({meta.get("filename", "?") for _, meta in relevant}),
         "rewritten_query": rewritten,
+        "detected_lang": detected_lang,
     }

@@ -108,7 +108,7 @@ def _file_id_for_path(filepath: str) -> str:
 class ChatRequest(BaseModel):
     question: str
     department: str = "all"
-    session_id: str
+    session_id: str | None = None
 
 
 class SessionStartRequest(BaseModel):
@@ -331,7 +331,12 @@ def chat(req: ChatRequest):
     history = get_recent_messages(session_id, limit=8)
     add_message(session_id, role="user", content=question)
 
-    result = rag_query(question, department=dept, history=history)
+    result = rag_query(
+        question=question,
+        session_id=session_id,
+        department=dept,
+        history=history,
+    )
     answer = result.get("answer", "")
     sources = result.get("sources", [])
     rewritten = result.get("rewritten_query")
