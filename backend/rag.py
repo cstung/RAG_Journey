@@ -3,9 +3,8 @@ import os
 from openai import OpenAI
 from rank_bm25 import BM25Okapi
 
-from database import update_session_lang
 from db import collection
-from language import detect_language, get_system_prompt
+from language import detect_language, build_system_prompt, build_user_prompt
 
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -123,31 +122,23 @@ def _history_for_llm(history: list[dict] | None) -> list[dict]:
     return out
 
 
-def rewrite_query(question: str, history: list[dict] | None = None) -> str:
-    hist = _history_for_llm(history)
-    convo = "\n".join(
-        ("User: " if message["role"] == "user" else "Assistant: ") + message["content"]
-        for message in hist
-    ).strip()
-
-    response = client.chat.completions.create(
+def rewrite_query(question: str) -> str:
+    """
+    Rewrite query in Vietnamese for accurate document search.
+    Documents are in Vietnamese regardless of what language the user asked in.
+    """
+    resp = client.chat.completions.create(
         model=LLM_MODEL,
-        messages=[
-            {
-                "role": "user",
-                "content": (
-                    "Ban la tro ly tim kiem tai lieu noi bo cong ty.\n"
-                    "Viet lai cau hoi sau thanh cau tim kiem day du hon, them tu khoa lien quan.\n"
-                    "Chi tra ve cau tim kiem, khong giai thich.\n\n"
-                    + (f"CONVERSATION CONTEXT:\n{convo}\n\n" if convo else "")
-                    + f"Cau hoi: {question}\nCau tim kiem:"
-                ),
-            }
-        ],
-        temperature=0,
-        max_tokens=120,
+        messages=[{"role": "user", "content": (
+            "You are a search query optimizer for a Vietnamese internal document system.\n"
+            "Rewrite the following question as a Vietnamese search query with relevant keywords.\n"
+            "Output ONLY the rewritten query in Vietnamese, nothing else.\n\n"
+            f"Question: {question}\n"
+            "Vietnamese search query:"
+        )}],
+        temperature=0, max_tokens=120
     )
-    return (response.choices[0].message.content or "").strip()
+    return resp.choices[0].message.content.strip()
 
 
 def vector_search(query_text: str, n: int, department: str = None) -> list[str]:
@@ -192,16 +183,10 @@ def rrf_merge(vec_ids: list[str], bm25_ids: list[str], k: int = 60) -> list[str]
     return sorted(scores, key=lambda item_id: scores[item_id], reverse=True)
 
 
-def query(
-    question: str,
-    session_id: str | None = None,
-    department: str = None,
-    history: list[dict] | None = None,
-) -> dict:
+def query(question: str, session_id: str = None, department: str = None) -> dict:
+    # Detect language
     detected_lang = detect_language(question)
-    system_prompt = get_system_prompt(detected_lang, COMPANY_NAME)
-    if session_id:
-        update_session_lang(session_id, detected_lang)
+    print(f"[RAG] Detected language: {detected_lang} | Q: {question!r}")
 
     total = collection.count()
     print(f"[RAG] Total chunks in DB: {total} | BM25 index size: {len(_idx.ids)}")
@@ -214,7 +199,7 @@ def query(
             "detected_lang": detected_lang,
         }
 
-    rewritten = rewrite_query(question, history=history)
+    rewritten = rewrite_query(question)
     print(f"[RAG] Q: {question!r} -> {rewritten!r}")
 
     vec_ids = vector_search(rewritten, RETRIEVE_N, department)
@@ -232,8 +217,13 @@ def query(
             relevant.append((text, meta))
 
     if not relevant:
+        not_found = {
+            "vi": "Tôi không tìm thấy thông tin liên quan trong tài liệu nội bộ. Vui lòng liên hệ bộ phận phụ trách.",
+            "ko": "내부 문서에서 관련 정보를 찾을 수 없습니다. 담당 부서에 문의해 주세요.",
+            "en": "I could not find relevant information in the internal documents. Please contact the responsible department.",
+        }
         return {
-            "answer": NO_MATCH_MESSAGES.get(detected_lang, NO_MATCH_MESSAGES["vi"]),
+            "answer": not_found.get(detected_lang, not_found["vi"]),
             "sources": [],
             "rewritten_query": rewritten,
             "detected_lang": detected_lang,
@@ -250,21 +240,21 @@ def query(
         for text, meta in relevant
     )
 
-    hist_msgs = _history_for_llm(history)
+    system_prompt = build_system_prompt(detected_lang, COMPANY_NAME)
+    user_prompt   = build_user_prompt(question, context, detected_lang)
 
-    response = client.chat.completions.create(
+    resp = client.chat.completions.create(
         model=LLM_MODEL,
         messages=[
             {"role": "system", "content": system_prompt},
-            *hist_msgs,
-            {"role": "user", "content": f"TAI LIEU:\n{context}\n\nCAU HOI: {question}"},
+            {"role": "user",   "content": user_prompt}
         ],
-        temperature=0.0,
-        max_tokens=1000,
+        temperature=0.1,
+        max_tokens=1000
     )
 
     return {
-        "answer": response.choices[0].message.content,
+        "answer": resp.choices[0].message.content,
         "sources": list({meta.get("filename", "?") for _, meta in relevant}),
         "rewritten_query": rewritten,
         "detected_lang": detected_lang,

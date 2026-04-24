@@ -106,9 +106,9 @@ def _file_id_for_path(filepath: str) -> str:
 
 
 class ChatRequest(BaseModel):
-    question: str
-    department: str = "all"
+    question:   str
     session_id: str | None = None
+    department: str = "all"
 
 
 class SessionStartRequest(BaseModel):
@@ -319,36 +319,13 @@ def departments():
 @app.post("/api/chat")
 def chat(req: ChatRequest):
     if not req.question.strip():
-        raise HTTPException(400, "Question cannot be empty")
-    if not req.session_id or not req.session_id.strip():
-        raise HTTPException(400, "session_id is required")
-    session_id = req.session_id.strip()
-    if not session_exists(session_id):
-        raise HTTPException(404, "Session not found")
+        raise HTTPException(status_code=400, detail="Question cannot be empty")
     dept = None if req.department == "all" else req.department
-
-    question = req.question.strip()
-    history = get_recent_messages(session_id, limit=8)
-    add_message(session_id, role="user", content=question)
-
     result = rag_query(
-        question=question,
-        session_id=session_id,
-        department=dept,
-        history=history,
+        question=req.question.strip(),
+        session_id=req.session_id,
+        department=dept
     )
-    answer = result.get("answer", "")
-    sources = result.get("sources", [])
-    rewritten = result.get("rewritten_query")
-    bot_message_id = add_message(
-        session_id,
-        role="assistant",
-        content=answer,
-        sources=sources if isinstance(sources, list) else None,
-        rewritten_query=rewritten,
-    )
-    result["session_id"] = session_id
-    result["message_id"] = bot_message_id
     return result
 
 
