@@ -143,6 +143,11 @@ class AdminTestEmailRequest(BaseModel):
     body: str = "This is a test email from Internal Chatbot."
 
 
+class DocumentUpdateRequest(BaseModel):
+    department: str
+    category: str
+
+
 @app.get("/api/health")
 def health():
     return {"status": "ok", "chunks": collection.count()}
@@ -269,6 +274,33 @@ def admin_get_document(document_id: int):
         raise HTTPException(404, "Document not found")
     doc["versions"] = list_document_versions(doc["filename"], doc["department"], doc["category"])
     return doc
+
+
+@app.patch("/api/admin/documents/{document_id}")
+def admin_update_document(document_id: int, req: DocumentUpdateRequest):
+    from rag.core import sync_document_metadata
+    
+    doc = get_document(document_id)
+    if not doc:
+        raise HTTPException(404, "Document not found")
+        
+    dept = req.department.strip() or "General"
+    cat = req.category.strip() or "general"
+    
+    # 1. Update SQLite
+    from database import update_document_metadata
+    update_document_metadata(document_id, dept, cat)
+    
+    # 2. Sync to ChromaDB (Crucial for search filters)
+    try:
+        sync_document_metadata(document_id, dept, cat)
+    except Exception as e:
+        print(f"[Admin] Warning: ChromaDB sync failed for doc {document_id}: {e}")
+        # We don't fail the whole request because SQLite is updated, 
+        # but the user should know search might be stale.
+        return {"status": "partial_ok", "warning": f"SQLite updated but ChromaDB sync failed: {e}"}
+
+    return {"status": "ok", "message": f"Đã cập nhật metadata cho {doc['filename']}"}
 
 
 @app.get("/api/admin/notifications/emails")

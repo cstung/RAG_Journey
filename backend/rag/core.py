@@ -98,6 +98,51 @@ def get_departments() -> list[str]:
     return _idx.departments()
 
 
+def sync_document_metadata(document_id: int, department: str, category: str):
+    """Updates metadata for all chunks in ChromaDB belonging to a specific document."""
+    from .retrieval_gate import SIMILARITY_THRESHOLD # just to ensure imports are ok if needed
+    
+    # 1. Get all chunks for this document
+    # Note: document_id is stored in metadata
+    results = collection.get(where={"document_id": document_id}, include=["metadatas"])
+    if not results["ids"]:
+        print(f"[RAG] No chunks found in Chroma for document_id {document_id}. Sync skipped.")
+        return
+
+    # 2. Determine domain (consistent with ingest.py logic)
+    # Since we don't have the full path here easily, we use filename from metadata
+    test_meta = results["metadatas"][0]
+    filename = test_meta.get("filename", "")
+    
+    domain = "internal"
+    fn_lower = filename.lower()
+    if any(k in fn_lower for k in ["lao-dong", "lao_dong", "labour"]):
+        domain = "lao_dong"
+    elif any(k in fn_lower for k in ["giao-thong", "giao_thong", "traffic"]):
+        domain = "giao_thong"
+    elif any(k in fn_lower for k in ["doanh-nghiep", "enterprise"]):
+        domain = "doanh_nghiep"
+    elif any(k in department.lower() for k in ["phap-ly", "legal"]):
+        domain = "legal"
+
+    # 3. Batch update metadata
+    new_metas = []
+    for m in results["metadatas"]:
+        m["department"] = department
+        m["category"] = category
+        m["domain"] = domain
+        new_metas.append(m)
+
+    collection.update(
+        ids=results["ids"],
+        metadatas=new_metas
+    )
+    print(f"[RAG] Synced {len(new_metas)} chunks for doc {document_id} -> {department}/{category}/{domain}")
+    
+    # 4. Rebuild BM25 index since it relies on department filtering
+    rebuild_index()
+
+
 def get_embedding(text: str) -> list[float]:
     return client.embeddings.create(model="text-embedding-3-small", input=text[:8000]).data[0].embedding
 

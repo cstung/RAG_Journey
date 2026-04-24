@@ -585,6 +585,9 @@ function DocumentsTab({
   const [crawl, setCrawl] = useState("");
   const [loading, setLoading] = useState(false);
   const [detail, setDetail] = useState<any | null>(null);
+  const [editDept, setEditDept] = useState("");
+  const [editCat, setEditCat] = useState("");
+  const [saving, setSaving] = useState(false);
 
   const load = useCallback(
     async (p = 1) => {
@@ -633,7 +636,36 @@ function DocumentsTab({
 
   async function openDetail(id: number) {
     const res = await guard(`/api/admin/documents/${id}`);
-    setDetail(await res.json());
+    const data = await res.json();
+    setDetail(data);
+    setEditDept(data.department);
+    setEditCat(data.category);
+  }
+
+  async function saveMetadata() {
+    if (!detail) return;
+    setSaving(true);
+    setStatus({ kind: "info", text: "Updating metadata…" });
+    try {
+      const res = await guard(`/api/admin/documents/${detail.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          department: editDept.trim(),
+          category: editCat.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+      setStatus({ kind: "ok", text: "Metadata updated successfully" });
+      setDetail(null);
+      load(page);
+      onStatsRefresh();
+    } catch (e) {
+      setStatus({ kind: "err", text: (e as Error).message });
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -728,12 +760,38 @@ function DocumentsTab({
             <DetailHeader
               rows={[
                 ["Filename", detail.filename],
-                ["Department", `${detail.department} · ${detail.category}`],
                 ["Active", detail.is_active ? "Yes" : "No"],
                 ["Version", String(detail.version)],
                 ["Path", detail.file_path],
               ]}
             />
+
+            <div className="mt-4 rounded-xl border border-border bg-secondary/30 p-4">
+              <h4 className="mb-3 text-[13px] font-bold text-foreground">Edit Metadata</h4>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="mb-1.5 block text-[11px] font-bold uppercase text-muted-foreground">
+                    Department
+                  </label>
+                  <Input value={editDept} onChange={(e) => setEditDept(e.target.value)} className="h-9" />
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-[11px] font-bold uppercase text-muted-foreground">
+                    Category
+                  </label>
+                  <Input value={editCat} onChange={(e) => setEditCat(e.target.value)} className="h-9" />
+                </div>
+              </div>
+              <Button
+                size="sm"
+                className="mt-4 w-full"
+                disabled={saving}
+                onClick={saveMetadata}
+              >
+                {saving ? "Saving…" : "Save Metadata"}
+              </Button>
+            </div>
+
             <PreBlock title="Versions (max 5)">
               {(detail.versions || [])
                 .map(

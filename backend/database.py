@@ -448,6 +448,18 @@ def update_document_file_path(document_id: int, file_path: str) -> None:
         conn.close()
 
 
+def update_document_metadata(document_id: int, department: str, category: str) -> None:
+    conn = get_db()
+    try:
+        conn.execute(
+            "UPDATE documents SET department = ?, category = ? WHERE id = ?",
+            (department, category, document_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def set_document_chunk_count(document_id: int, chunk_count: int) -> None:
     conn = get_db()
     try:
