@@ -4,7 +4,13 @@ from openai import OpenAI
 from rank_bm25 import BM25Okapi
 
 from db import collection
-from language import detect_language, build_system_prompt, build_user_prompt
+from language import detect_language
+from .chunk_sanitiser import sanitise_chunk
+from .citation_checker import extract_and_check_citation
+from .confidence_parser import extract_confidence
+from .output_guard import validate_output
+from .prompt_builder import build_prompt
+from .retrieval_gate import NO_RESULTS_SENTINEL, SIMILARITY_THRESHOLD, filter_chunks
 
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -129,49 +135,82 @@ def rewrite_query(question: str) -> str:
     """
     resp = client.chat.completions.create(
         model=LLM_MODEL,
-        messages=[{"role": "user", "content": (
-            "You are a search query optimizer for a Vietnamese internal document system.\n"
-            "Rewrite the following question as a Vietnamese search query with relevant keywords.\n"
-            "Output ONLY the rewritten query in Vietnamese, nothing else.\n\n"
-            f"Question: {question}\n"
-            "Vietnamese search query:"
-        )}],
-        temperature=0, max_tokens=120
+        messages=[{
+            "role": "user",
+            "content": (
+                "You are a search query optimizer for a Vietnamese internal document system.\n"
+                "Rewrite the following question as a Vietnamese search query with relevant keywords.\n"
+                "Output ONLY the rewritten query in Vietnamese, nothing else.\n\n"
+                f"Question: {question}\n"
+                "Vietnamese search query:"
+            ),
+        }],
+        temperature=0,
+        max_tokens=120,
     )
     return resp.choices[0].message.content.strip()
 
 
-def vector_search(query_text: str, n: int, department: str = None) -> list[str]:
+def _distance_to_similarity(distance: float | None) -> float:
+    """
+    Chroma returns distances; for cosine distance it's typically (1 - cosine_similarity).
+    Convert to a similarity-like score for thresholding.
+    """
+    try:
+        d = float(distance)
+    except Exception:
+        return 0.0
+    sim = 1.0 - d
+    if sim < 0.0:
+        return 0.0
+    if sim > 1.0:
+        return 1.0
+    return sim
+
+
+def vector_search(query_text: str, n: int, department: str = None) -> tuple[list[str], list[str], list[float]]:
     total = collection.count()
     if total == 0:
-        return []
+        return [], [], []
 
     kwargs = {
         "query_embeddings": [get_embedding(query_text)],
         "n_results": min(n, total),
-        "include": ["metadatas"],
+        "include": ["documents", "metadatas", "distances"],
     }
 
     if department and department != "all":
         kwargs["where"] = {"department": department}
         try:
             result = collection.query(**kwargs)
-            return result["ids"][0]
+            ids = result.get("ids", [[]])[0]
+            docs = result.get("documents", [[]])[0]
+            dists = result.get("distances", [[]])[0]
+            sims = [_distance_to_similarity(d) for d in dists]
+            return ids, docs, sims
         except Exception as exc:
             print(f"[RAG] Vector search retry for department {department}: {exc}")
             try:
                 all_dept = collection.get(where={"department": department}, include=[])
                 count = len(all_dept["ids"])
                 if count == 0:
-                    return []
+                    return [], [], []
                 kwargs["n_results"] = min(n, count)
                 result = collection.query(**kwargs)
-                return result["ids"][0]
+                ids = result.get("ids", [[]])[0]
+                docs = result.get("documents", [[]])[0]
+                dists = result.get("distances", [[]])[0]
+                sims = [_distance_to_similarity(d) for d in dists]
+                return ids, docs, sims
             except Exception:
-                return []
+                return [], [], []
 
     result = collection.query(**kwargs)
-    return result["ids"][0]
+    ids = result.get("ids", [[]])[0]
+    docs = result.get("documents", [[]])[0]
+    dists = result.get("distances", [[]])[0]
+    sims = [_distance_to_similarity(d) for d in dists]
+    return ids, docs, sims
 
 
 def rrf_merge(vec_ids: list[str], bm25_ids: list[str], k: int = 60) -> list[str]:
@@ -202,60 +241,73 @@ def query(question: str, session_id: str = None, department: str = None) -> dict
     rewritten = rewrite_query(question)
     print(f"[RAG] Q: {question!r} -> {rewritten!r}")
 
-    vec_ids = vector_search(rewritten, RETRIEVE_N, department)
+    vec_ids, vec_docs, vec_sims = vector_search(rewritten, RETRIEVE_N, department)
     bm25_hits = _idx.search(rewritten, RETRIEVE_N, department)
     bm25_ids = [hit[0] for hit in bm25_hits]
 
     print(f"[RAG] Vector hits: {len(vec_ids)} | BM25 hits: {len(bm25_ids)}")
 
-    merged_ids = rrf_merge(vec_ids, bm25_ids)[:TOP_K]
-    relevant = []
-    for item_id in merged_ids:
-        text = _idx.get_text(item_id)
-        meta = _idx.get_meta(item_id)
-        if text and meta:
-            relevant.append((text, meta))
+    filtered_docs = filter_chunks(vec_docs, vec_sims)
+    gated_vec_ids = [item_id for item_id, sim in zip(vec_ids, vec_sims) if sim >= SIMILARITY_THRESHOLD]
+    if len(filtered_docs) == 1 and filtered_docs[0] == NO_RESULTS_SENTINEL:
+        context = NO_RESULTS_SENTINEL
+        available_sources: list[str] = []
+        relevant: list[tuple[str, dict]] = []
+    else:
+        gated_set = set(gated_vec_ids)
+        bm25_ids = [item_id for item_id in bm25_ids if item_id in gated_set]
 
-    if not relevant:
-        not_found = {
-            "vi": "Tôi không tìm thấy thông tin liên quan trong tài liệu nội bộ. Vui lòng liên hệ bộ phận phụ trách.",
-            "ko": "내부 문서에서 관련 정보를 찾을 수 없습니다. 담당 부서에 문의해 주세요.",
-            "en": "I could not find relevant information in the internal documents. Please contact the responsible department.",
-        }
-        return {
-            "answer": not_found.get(detected_lang, not_found["vi"]),
-            "sources": [],
-            "rewritten_query": rewritten,
-            "detected_lang": detected_lang,
-        }
+        merged_ids = rrf_merge(gated_vec_ids, bm25_ids)[:TOP_K]
+        relevant = []
+        for item_id in merged_ids:
+            text = _idx.get_text(item_id)
+            meta = _idx.get_meta(item_id)
+            if text and meta:
+                relevant.append((text, meta))
 
-    source_counts = {}
-    for _, meta in relevant:
-        filename = meta.get("filename", "?")
-        source_counts[filename] = source_counts.get(filename, 0) + 1
-    print(f"[RAG] Retrieved {len(relevant)} chunks from {len(source_counts)} files: {source_counts}")
+        if not relevant:
+            context = NO_RESULTS_SENTINEL
+            available_sources = []
+        else:
+            source_counts: dict[str, int] = {}
+            for _, meta in relevant:
+                filename = meta.get("filename", "?")
+                source_counts[filename] = source_counts.get(filename, 0) + 1
+            print(f"[RAG] Retrieved {len(relevant)} chunks from {len(source_counts)} files: {source_counts}")
 
-    context = "\n\n---\n\n".join(
-        f"[{meta.get('department', '?')} | {meta.get('filename', '?')} | Trang {meta.get('page', '?')}]\n{text}"
-        for text, meta in relevant
-    )
-
-    system_prompt = build_system_prompt(detected_lang, COMPANY_NAME)
-    user_prompt   = build_user_prompt(question, context, detected_lang)
+            available_sources = list({meta.get("filename", "?") for _, meta in relevant})
+            context = "\n\n---\n\n".join(
+                f"[{meta.get('department', '?')} | {meta.get('filename', '?')} | Trang {meta.get('page', '?')}]\n{sanitise_chunk(text)}"
+                for text, meta in relevant
+            )
 
     resp = client.chat.completions.create(
         model=LLM_MODEL,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user",   "content": user_prompt}
-        ],
+        messages=build_prompt(context=context, question=question),
         temperature=0.1,
-        max_tokens=1000
+        max_tokens=1000,
     )
 
+    raw_answer = resp.choices[0].message.content
+    final_answer, was_flagged = validate_output(raw_answer)
+    if was_flagged:
+        print(f"[RAG] Output flagged by output_guard. Raw answer: {_trim(str(raw_answer), 500)!r}")
+        clean_answer = final_answer
+        confidence = "THẤP"
+        citation_valid = False
+        sources = []
+    else:
+        clean_answer, citation_valid = extract_and_check_citation(final_answer, available_sources)
+        clean_answer, confidence = extract_confidence(clean_answer)
+        if not citation_valid:
+            confidence = "THẤP"
+        sources = available_sources
+
     return {
-        "answer": resp.choices[0].message.content,
-        "sources": list({meta.get("filename", "?") for _, meta in relevant}),
+        "answer": clean_answer,
+        "sources": sources,
+        "confidence": confidence,
+        "citation_valid": citation_valid,
         "rewritten_query": rewritten,
         "detected_lang": detected_lang,
     }

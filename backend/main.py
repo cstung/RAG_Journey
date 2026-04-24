@@ -40,6 +40,8 @@ from database import (
 )
 from rag import query as rag_query, rebuild_index, get_departments
 from ingest import ingest_all, ingest_file, extract_html_text
+from middleware.rate_limit import ip_limiter, session_limiter
+from utils.input_guard import sanitise_question
 
 def _parse_basic_auth(authorization: str | None) -> tuple[str, str] | None:
     if not authorization:
@@ -317,12 +319,25 @@ def departments():
 
 
 @app.post("/api/chat")
-def chat(req: ChatRequest):
-    if not req.question.strip():
+def chat(req: ChatRequest, request: Request):
+    cleaned_question, is_suspicious = sanitise_question(req.question or "")
+    if is_suspicious:
+        raise HTTPException(status_code=400, detail="Suspicious input detected")
+
+    if not cleaned_question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty")
+
+    xff = request.headers.get("x-forwarded-for")
+    ip = (xff.split(",", 1)[0].strip() if xff else "") or (request.client.host if request.client else "") or "unknown"
+    session_key = (req.session_id or "").strip() or ip
+
+    if not session_limiter.is_allowed(f"sess:{session_key}"):
+        raise HTTPException(status_code=429, detail="Too many requests. Please try again later.")
+    if not ip_limiter.is_allowed(f"ip:{ip}"):
+        raise HTTPException(status_code=429, detail="Too many requests. Please try again later.")
     dept = None if req.department == "all" else req.department
     result = rag_query(
-        question=req.question.strip(),
+        question=cleaned_question.strip(),
         session_id=req.session_id,
         department=dept
     )
