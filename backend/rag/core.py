@@ -3,6 +3,7 @@ import os
 from openai import OpenAI
 from rank_bm25 import BM25Okapi
 
+from database import get_recent_messages
 from db import collection
 from language import detect_language
 from .chunk_sanitiser import sanitise_chunk
@@ -18,8 +19,6 @@ COMPANY_NAME = os.getenv("COMPANY_NAME", "cong ty")
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
 TOP_K = int(os.getenv("TOP_K", "6"))
 RETRIEVE_N = 15
-HISTORY_MAX = 8
-HISTORY_CHARS_PER_MSG = 800
 
 NO_DOCS_MESSAGES = {
     "vi": "Chua co tai lieu nao. Vui long upload tai lieu truoc.",
@@ -110,29 +109,22 @@ def _trim(text: str, n: int) -> str:
     return text[:n].rstrip() + "..."
 
 
-def _history_for_llm(history: list[dict] | None) -> list[dict]:
-    if not history:
-        return []
-
-    out: list[dict] = []
-    for message in history[-HISTORY_MAX:]:
-        role = (message.get("role") or "").strip().lower()
-        if role not in ("user", "assistant"):
-            continue
-        out.append(
-            {
-                "role": role,
-                "content": _trim(str(message.get("content", "")), HISTORY_CHARS_PER_MSG),
-            }
-        )
-    return out
-
-
-def rewrite_query(question: str) -> str:
+def rewrite_query(question: str, history: list[dict] | None = None) -> str:
     """
     Rewrite query in Vietnamese for accurate document search.
     Documents are in Vietnamese regardless of what language the user asked in.
     """
+    history_lines: list[str] = []
+    for message in (history or []):
+        role = (message.get("role") or "").strip().lower()
+        if role not in ("user", "assistant"):
+            continue
+        history_lines.append(f"{role.upper()}: {str(message.get('content', '')).strip()}")
+
+    history_block = ""
+    if history_lines:
+        history_block = "Conversation history:\n" + "\n".join(history_lines) + "\n\n"
+
     resp = client.chat.completions.create(
         model=LLM_MODEL,
         messages=[{
@@ -140,7 +132,9 @@ def rewrite_query(question: str) -> str:
             "content": (
                 "You are a search query optimizer for a Vietnamese internal document system.\n"
                 "Rewrite the following question as a Vietnamese search query with relevant keywords.\n"
+                "Use the conversation history only to resolve references such as pronouns or omitted entities.\n"
                 "Output ONLY the rewritten query in Vietnamese, nothing else.\n\n"
+                f"{history_block}"
                 f"Question: {question}\n"
                 "Vietnamese search query:"
             ),
@@ -226,6 +220,7 @@ def query(question: str, session_id: str = None, department: str = None) -> dict
     # Detect language
     detected_lang = detect_language(question)
     print(f"[RAG] Detected language: {detected_lang} | Q: {question!r}")
+    history = get_recent_messages(session_id) if session_id else []
 
     total = collection.count()
     print(f"[RAG] Total chunks in DB: {total} | BM25 index size: {len(_idx.ids)}")
@@ -238,7 +233,7 @@ def query(question: str, session_id: str = None, department: str = None) -> dict
             "detected_lang": detected_lang,
         }
 
-    rewritten = rewrite_query(question)
+    rewritten = rewrite_query(question, history=history)
     print(f"[RAG] Q: {question!r} -> {rewritten!r}")
 
     vec_ids, vec_docs, vec_sims = vector_search(rewritten, RETRIEVE_N, department)
@@ -283,7 +278,7 @@ def query(question: str, session_id: str = None, department: str = None) -> dict
 
     resp = client.chat.completions.create(
         model=LLM_MODEL,
-        messages=build_prompt(context=context, question=question),
+        messages=build_prompt(context=context, question=question, history=history),
         temperature=0.1,
         max_tokens=1000,
     )

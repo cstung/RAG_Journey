@@ -300,15 +300,16 @@ def admin_test_email(req: AdminTestEmailRequest, request: Request):
 
 
 def _stats_payload() -> dict:
-    pdf_files = []
+    valid_exts = (".pdf", ".doc", ".docx", ".txt")
+    doc_files = []
     for root, _, files in os.walk(DOCS_DIR):
         for f in files:
-            if f.lower().endswith(".pdf"):
-                pdf_files.append(os.path.relpath(os.path.join(root, f), DOCS_DIR))
+            if f.lower().endswith(valid_exts):
+                doc_files.append(os.path.relpath(os.path.join(root, f), DOCS_DIR))
     return {
         "total_chunks": collection.count(),
-        "total_files":  len(pdf_files),
-        "files":        sorted(pdf_files),
+        "total_files":  len(doc_files),
+        "files":        sorted(doc_files),
         "departments":  get_departments(),
     }
 
