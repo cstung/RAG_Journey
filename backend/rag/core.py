@@ -100,7 +100,6 @@ def get_departments() -> list[str]:
 
 def sync_document_metadata(document_id: int, department: str, category: str):
     """Updates metadata for all chunks in ChromaDB belonging to a specific document."""
-    from .retrieval_gate import SIMILARITY_THRESHOLD # just to ensure imports are ok if needed
     
     # 1. Get all chunks for this document
     # Note: document_id is stored in metadata
@@ -259,8 +258,8 @@ def query(question: str, session_id: str = None, department: str = None) -> dict
     # Detect language
     detected_lang = detect_language(question)
     print(f"[RAG] Detected language: {detected_lang} | Q: {question!r}")
+    
     history = get_recent_messages(session_id) if session_id else []
-
     total = collection.count()
     print(f"[RAG] Total chunks in DB: {total} | BM25 index size: {len(_idx.ids)}")
 
@@ -289,63 +288,46 @@ def query(question: str, session_id: str = None, department: str = None) -> dict
         print(f"[RAG] Max Vector similarity: {max(vec_sims):.4f} | Min: {min(vec_sims):.4f}")
 
     # Step 1: Filter vector hits by threshold
-    gated_vec_ids = [vid for vid, sim in zip(vec_ids, vec_sims) if sim >= SIMILARITY_THRESHOLD]
+    gated_vec_ids = [vid for vid, sim in zip(vec_ids, vec_sims) if sim >= 0.35]
 
     # Step 2: Filter BM25 hits by their own threshold (don't force them through vector gate)
     # hit[2] is the BM25 score
     gated_bm25_ids = [hit[0] for hit in bm25_hits if hit[2] >= BM25_MIN_SCORE]
-
-    if not gated_vec_ids and not gated_bm25_ids:
-        # --- EARLY EXIT: Stricter Abstention ---
-        # If both channels are weak, skip LLM call to prevent hallucinations
-        print(f"[RAG] Early exit: No documents passed gates. Returning abstention.")
-        return {
-            "answer": NO_MATCH_MESSAGES.get(detected_lang, NO_MATCH_MESSAGES["vi"]),
-            "sources": [],
-            "confidence": "THẤP",
-            "citation_valid": False,
-            "rewritten_query": rewritten,
-            "detected_lang": detected_lang,
-        }
     
-    # Merge results (RRF handles ranking across sources)
-    merged_ids = rrf_merge(gated_vec_ids, gated_bm25_ids)[:TOP_K]
-    relevant = []
-    for item_id in merged_ids:
-        text = _idx.get_text(item_id)
-        meta = _idx.get_meta(item_id)
-        if text and meta:
-            relevant.append((text, meta))
+    if not gated_vec_ids and not gated_bm25_ids:
+        context = NO_RESULTS_SENTINEL
+        available_sources = []
+        relevant = []
+    else:
+        # Merge results (RRF handles ranking across sources)
+        merged_ids = rrf_merge(gated_vec_ids, gated_bm25_ids)[:TOP_K]
+        relevant = []
+        for item_id in merged_ids:
+            text = _idx.get_text(item_id)
+            meta = _idx.get_meta(item_id)
+            if text and meta:
+                relevant.append((text, meta))
 
-    if not relevant:
-        # --- EARLY EXIT: Empty relevant list ---
-        print(f"[RAG] Early exit: No relevant chunks found after merging.")
-        return {
-            "answer": NO_MATCH_MESSAGES.get(detected_lang, NO_MATCH_MESSAGES["vi"]),
-            "sources": [],
-            "confidence": "THẤP",
-            "citation_valid": False,
-            "rewritten_query": rewritten,
-            "detected_lang": detected_lang,
-        }
+        if not relevant:
+            context = NO_RESULTS_SENTINEL
+            available_sources = []
+        else:
+            source_counts: dict[str, int] = {}
+            for _, meta in relevant:
+                filename = meta.get("filename", "?")
+                source_counts[filename] = source_counts.get(filename, 0) + 1
+            print(f"[RAG] Retrieved {len(relevant)} chunks from {len(source_counts)} files: {source_counts}")
 
-    # If we got here, we have context. Build the sources and context block.
-    source_counts: dict[str, int] = {}
-    for _, meta in relevant:
-        filename = meta.get("filename", "?")
-        source_counts[filename] = source_counts.get(filename, 0) + 1
-    print(f"[RAG] Retrieved {len(relevant)} chunks from {len(source_counts)} files: {source_counts}")
-
-    available_sources = list({meta.get("filename", "?") for _, meta in relevant})
-    context = "\n\n---\n\n".join(
-        f"[{meta.get('department', '?')} | {meta.get('filename', '?')} | Trang {meta.get('page', '?')}]\n{sanitise_chunk(text)}"
-        for text, meta in relevant
-    )
+            available_sources = list({meta.get("filename", "?") for _, meta in relevant})
+            context = "\n\n---\n\n".join(
+                f"[{meta.get('department', '?')} | {meta.get('filename', '?')} | Trang {meta.get('page', '?')}]\n{sanitise_chunk(text)}"
+                for text, meta in relevant
+            )
 
     resp = client.chat.completions.create(
         model=LLM_MODEL,
         messages=build_prompt(context=context, question=question, history=history),
-        temperature=0.0, # Hyper-strict groundedness
+        temperature=0.3, 
         max_tokens=1000,
     )
 
