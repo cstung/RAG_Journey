@@ -173,7 +173,7 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
                 continue
                 
             found += 1
-            if found % 10 == 0:
+            if found % 10 == 0 or found == total_to_find:
                 print(f"[hf_legal] Content scan: {found}/{total_to_find} docs found")
                 
             meta_row = meta_dict[doc_id]
@@ -197,7 +197,7 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
             
             valid_ids.discard(doc_id)
             if not valid_ids:
-                print("[hf_legal] Found all requested documents. Stopping stream.")
+                print(f"[hf_legal] All {total_to_find} docs found. Stopping stream early.")
                 break
 
 

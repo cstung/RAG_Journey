@@ -9,10 +9,10 @@ services:
     env_file: .env
     environment:
       - HF_TOKEN=${HF_TOKEN:-}
+      - HF_HOME=/app/data/hf_cache
     volumes:
       - ./data:/app/data
       - ./backend:/app                   # dev hot-reload
-      - ./data/hf_cache:/root/.cache/huggingface  # persist HF dataset cache
     depends_on:
       qdrant:
         condition: service_started
