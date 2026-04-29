@@ -808,6 +808,23 @@ def _first_existing_dir(paths: list[str]) -> str | None:
     return None
 
 
+@app.post("/api/admin/eval")
+async def run_eval(_=Depends(verify_admin)):
+    """Run RAGAS eval in background, return results path."""
+    import subprocess
+    proc = subprocess.Popen(
+        ["python", "eval/run_eval.py"],
+        cwd=os.path.dirname(__file__),
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
+    stdout, stderr = proc.communicate(timeout=300)
+    return {"stdout": stdout.decode(), "stderr": stderr.decode()}
+
+@app.get("/admin/datasets")
+async def admin_datasets_page():
+    return FileResponse(os.path.join(os.path.dirname(__file__), "static", "admin_datasets.html"))
+
+
 # Prefer serving the built React frontend when present.
 # - Local dev build:   <repo>/frontend/dist
 # - Optional copy-in:  <repo>/backend/frontend/dist
@@ -830,19 +847,3 @@ else:
     )
     if _STATIC_DIR:
         app.mount("/", SPAStaticFiles(directory=_STATIC_DIR, html=True), name="static")
-
-@app.post("/api/admin/eval")
-async def run_eval(_=Depends(verify_admin)):
-    """Run RAGAS eval in background, return results path."""
-    import subprocess
-    proc = subprocess.Popen(
-        ["python", "eval/run_eval.py"],
-        cwd=os.path.dirname(__file__),
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE
-    )
-    stdout, stderr = proc.communicate(timeout=300)
-    return {"stdout": stdout.decode(), "stderr": stderr.decode()}
-
-@app.get("/admin/datasets")
-async def admin_datasets_page():
-    return FileResponse(os.path.join(os.path.dirname(__file__), "static", "admin_datasets.html"))
