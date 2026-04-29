@@ -93,7 +93,7 @@ export function ChatInput({
           </div>
         </div>
         <p className="mt-2 hidden text-center text-[11px] text-muted-foreground sm:block">
-          Where wonder moves you · Built to work beyond the board.
+          Trợ lý pháp lý nội bộ · Tìm kiếm thông minh từ tài liệu doanh nghiệp.
         </p>
       </div>
     </div>

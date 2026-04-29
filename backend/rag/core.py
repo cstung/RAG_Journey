@@ -115,8 +115,6 @@ def get_departments() -> list[str]:
     return _idx.departments()
 
 
-def sync_document_metadata(document_id: int, department: str, category: str):
-    pass # To be implemented for Qdrant
 
 
 def get_embedding(text: str) -> list[float]:

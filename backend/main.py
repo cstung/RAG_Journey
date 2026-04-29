@@ -170,8 +170,7 @@ class DocumentUpdateRequest(BaseModel):
 
 
 @app.post("/api/admin/datasets/ingest")
-async def trigger_ingest(req: IngestRequest, background_tasks: BackgroundTasks,
-                         _=Depends(verify_admin)):
+async def trigger_ingest(req: IngestRequest, background_tasks: BackgroundTasks):
     """Start ingestion in background. Returns immediately with job_id."""
     job_id = f"{req.dataset_id.replace('/', '_')}_{int(time.time())}"
 
@@ -194,7 +193,7 @@ async def trigger_ingest(req: IngestRequest, background_tasks: BackgroundTasks,
     return {"job_id": job_id, "status": "queued"}
 
 @app.get("/api/admin/datasets/status/{job_id}")
-async def ingest_status(job_id: str, _=Depends(verify_admin)):
+async def ingest_status(job_id: str):
     state = _ingest_state.get(job_id)
     if state is None:
         # Try reading from disk (survive restarts)
@@ -339,27 +338,34 @@ def admin_get_document(document_id: int):
 
 @app.patch("/api/admin/documents/{document_id}")
 def admin_update_document(document_id: int, req: DocumentUpdateRequest):
-    from rag.core import sync_document_metadata
-    
     doc = get_document(document_id)
     if not doc:
         raise HTTPException(404, "Document not found")
-        
+
     dept = req.department.strip() or "General"
     cat = req.category.strip() or "general"
-    
+
     # 1. Update SQLite
     from database import update_document_metadata
     update_document_metadata(document_id, dept, cat)
-    
-    # 2. Sync to ChromaDB (Crucial for search filters)
+
+    # 2. Sync payload to Qdrant for both collections
     try:
-        sync_document_metadata(document_id, dept, cat)
+        from vector_store import get_client, COLLECTION_PDF, COLLECTION_LEGAL
+        from qdrant_client.models import Filter, FieldCondition, MatchValue, SetPayload
+        qdrant = get_client()
+        payload_patch = {"department": dept, "category": cat}
+        for collection in (COLLECTION_PDF, COLLECTION_LEGAL):
+            qdrant.set_payload(
+                collection_name=collection,
+                payload=payload_patch,
+                points=Filter(
+                    must=[FieldCondition(key="document_id", match=MatchValue(value=document_id))]
+                ),
+            )
     except Exception as e:
-        print(f"[Admin] Warning: ChromaDB sync failed for doc {document_id}: {e}")
-        # We don't fail the whole request because SQLite is updated, 
-        # but the user should know search might be stale.
-        return {"status": "partial_ok", "warning": f"SQLite updated but ChromaDB sync failed: {e}"}
+        print(f"[Admin] Warning: Qdrant payload sync failed for doc {document_id}: {e}")
+        return {"status": "partial_ok", "warning": f"SQLite updated but Qdrant sync failed: {e}"}
 
     return {"status": "ok", "message": f"Đã cập nhật metadata cho {doc['filename']}"}
 
@@ -527,17 +533,6 @@ def submit_feedback(req: FeedbackRequest):
 def feedback_summary_api(session_id: str | None = Query(default=None)):
     return feedback_summary(session_id=session_id)
 
-
-@app.post("/api/upload")
-async def upload(
-    request: Request,
-    file: UploadFile = File(...),
-    department: str = Query(default="General"),
-    category:   str = Query(default="general"),
-    admin: bool = Depends(verify_admin)
-):
-    uploaded_by = "admin"
-    return await _handle_upload(request=request, file=file, department=department, category=category, uploaded_by=uploaded_by)
 
 
 @app.post("/api/admin/upload")
@@ -819,14 +814,6 @@ async def run_eval(_=Depends(verify_admin)):
     )
     stdout, stderr = proc.communicate(timeout=300)
     return {"stdout": stdout.decode(), "stderr": stderr.decode()}
-
-@app.get("/admin/datasets")
-async def admin_datasets_page():
-    # Check protected location first, then fallback to local static
-    for p in ["/frontend_dist/admin_datasets.html", os.path.join(os.path.dirname(__file__), "static", "admin_datasets.html")]:
-        if os.path.exists(p):
-            return FileResponse(p)
-    raise HTTPException(404, "Admin page not found")
 
 
 # Prefer serving the built React frontend when present.
