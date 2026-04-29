@@ -27,9 +27,6 @@ COPY backend/ /app/
 # Copy the built React frontend to a location that won't be clobbered by the /app volume
 COPY --from=frontend-builder /app/frontend/dist /frontend_dist
 
-# Ensure admin UI is also in that protected location
-COPY backend/static/admin_datasets.html /frontend_dist/admin_datasets.html
-
 EXPOSE 8000
 
 # Start the application

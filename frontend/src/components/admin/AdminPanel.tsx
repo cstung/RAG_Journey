@@ -201,15 +201,7 @@ export function AdminPanel({ token, departments, onStatsRefresh, onTokenInvalid 
             <DocumentsTab guard={guard} setStatus={setStatus} onStatsRefresh={onStatsRefresh} />
           )}
           {tab === "notifications" && <EmailsTab guard={guard} setStatus={setStatus} />}
-          {tab === "datasets" && (
-            <div className="h-[600px] w-full overflow-hidden rounded-2xl border border-border bg-card shadow-soft">
-              <iframe 
-                src="/admin/datasets" 
-                className="h-full w-full border-none"
-                title="Dataset Management"
-              />
-            </div>
-          )}
+          {tab === "datasets" && <DatasetsTab guard={guard} setStatus={setStatus} />}
         </div>
       </div>
     </section>
@@ -1000,6 +992,233 @@ function DetailModal({
         </div>
         <div className="space-y-3 overflow-auto px-5 py-4 scrollbar-thin">{children}</div>
       </div>
+    </div>
+  );
+}
+
+function DatasetsTab({
+  guard,
+  setStatus,
+}: {
+  guard: GuardFn;
+  setStatus: (s: { kind: "info" | "ok" | "err"; text: string }) => void;
+}) {
+  const [datasets, setDatasets] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [ingestModalOpen, setIngestModalOpen] = useState(false);
+  const [selectedDs, setSelectedDs] = useState("");
+  const [sectors, setSectors] = useState("");
+  const [minYear, setMinYear] = useState("2000");
+  const [legalTypes, setLegalTypes] = useState("");
+  const [maxDocs, setMaxDocs] = useState("");
+  
+  // Job tracking
+  const [activeJobs, setActiveJobs] = useState<Record<string, any>>({});
+  const activeJobsRef = useRef<Record<string, any>>({});
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await guard(`/api/datasets`);
+      const data = await res.json();
+      setDatasets(data.datasets || []);
+    } catch (e) {
+      setStatus({ kind: "err", text: "Failed to load datasets" });
+    } finally {
+      setLoading(false);
+    }
+  }, [guard, setStatus]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const pollJob = useCallback((jobId: string) => {
+    const interval = setInterval(async () => {
+      try {
+        const res = await guard(`/api/datasets/status/${jobId}`);
+        const state = await res.json();
+        
+        setActiveJobs((prev) => {
+          const updated = { ...prev, [jobId]: state };
+          activeJobsRef.current = updated;
+          return updated;
+        });
+
+        if (state.status === "completed" || (state.status && state.status.startsWith("error"))) {
+          clearInterval(interval);
+          setStatus({ kind: state.status === "completed" ? "ok" : "err", text: `Job ${jobId}: ${state.status}` });
+        }
+      } catch (e) {
+        console.error("Polling error", e);
+      }
+    }, 3000);
+  }, [guard, setStatus]);
+
+  const handleIngest = async () => {
+    if (!selectedDs) return;
+    setStatus({ kind: "info", text: `Starting ingestion for ${selectedDs}...` });
+    setIngestModalOpen(false);
+
+    const config: any = {
+      dataset_id: selectedDs,
+      min_year: parseInt(minYear) || 2000,
+    };
+    
+    const sList = sectors.split(",").map(s => s.trim()).filter(Boolean);
+    if (sList.length) config.sectors = sList;
+    
+    const lList = legalTypes.split(",").map(s => s.trim()).filter(Boolean);
+    if (lList.length) config.legal_types = lList;
+    
+    const maxD = parseInt(maxDocs);
+    if (!isNaN(maxD)) config.max_docs = maxD;
+
+    try {
+      const res = await guard("/api/datasets/ingest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(config)
+      });
+      const data = await res.json();
+      if (data.job_id) {
+        setActiveJobs(prev => ({ ...prev, [data.job_id]: { status: "queued", embedded: 0, total: 0 } }));
+        pollJob(data.job_id);
+      } else {
+        throw new Error(data.detail || "Failed to start job");
+      }
+    } catch (e) {
+      setStatus({ kind: "err", text: (e as Error).message });
+    }
+  };
+
+  const openIngest = (ds: string) => {
+    setSelectedDs(ds);
+    setIngestModalOpen(true);
+  };
+
+  return (
+    <div className="space-y-4">
+      <Card title="Available Datasets" icon={Database}>
+        {loading ? (
+          <Loading />
+        ) : !datasets.length ? (
+          <Empty label="No datasets found in registry" />
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {datasets.map((ds) => (
+              <div key={ds} className="flex flex-col gap-3 rounded-xl border border-border bg-secondary/30 p-4">
+                <h4 className="font-bold text-sm text-ocean-deep break-all">{ds}</h4>
+                <Button size="sm" onClick={() => openIngest(ds)} className="mt-auto">
+                  <Upload className="w-3.5 h-3.5 mr-1" /> Ingest
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {Object.keys(activeJobs).length > 0 && (
+        <Card title="Active Jobs" icon={RefreshCw}>
+          <TableShell>
+            <thead>
+              <tr>
+                <TH>Job ID</TH>
+                <TH>Status</TH>
+                <TH>Progress</TH>
+              </tr>
+            </thead>
+            <tbody>
+              {Object.entries(activeJobs).map(([jobId, state]) => {
+                const total = state.total || 0;
+                const embedded = state.embedded || 0;
+                const pct = total > 0 ? Math.min(100, Math.round((embedded / total) * 100)) : 0;
+                return (
+                  <tr key={jobId} className="hover:bg-secondary/60">
+                    <TD className="font-mono text-[11px]">{jobId}</TD>
+                    <TD>
+                      <span className={cn(
+                        "inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase",
+                        state.status === "completed" ? "bg-[hsl(var(--success))]/15 text-[hsl(var(--success))]" :
+                        state.status?.startsWith("error") ? "bg-destructive/10 text-destructive" :
+                        "bg-ocean/10 text-ocean-deep"
+                      )}>
+                        {state.status || "unknown"}
+                      </span>
+                    </TD>
+                    <TD>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-semibold w-16 text-right">{embedded} / {total}</span>
+                        <div className="h-2 flex-1 rounded-full bg-border overflow-hidden">
+                          <div 
+                            className="h-full bg-emerald-500 transition-all duration-300"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                        <span className="text-xs font-bold w-8">{pct}%</span>
+                      </div>
+                    </TD>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </TableShell>
+        </Card>
+      )}
+
+      <DetailModal title={`Ingest Dataset: ${selectedDs}`} data={ingestModalOpen ? {} : null} onClose={() => setIngestModalOpen(false)}>
+        <div className="space-y-4 pt-2">
+          <div>
+            <label className="mb-1.5 block text-[11px] font-bold uppercase text-muted-foreground">
+              Sectors (comma separated)
+            </label>
+            <Input 
+              value={sectors} 
+              onChange={(e) => setSectors(e.target.value)} 
+              placeholder="Lao động, Thuế" 
+              className="h-9" 
+            />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-[11px] font-bold uppercase text-muted-foreground">
+              Min Year
+            </label>
+            <Input 
+              type="number"
+              value={minYear} 
+              onChange={(e) => setMinYear(e.target.value)} 
+              className="h-9" 
+            />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-[11px] font-bold uppercase text-muted-foreground">
+              Legal Types (comma separated)
+            </label>
+            <Input 
+              value={legalTypes} 
+              onChange={(e) => setLegalTypes(e.target.value)} 
+              placeholder="Nghị định, Thông tư" 
+              className="h-9" 
+            />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-[11px] font-bold uppercase text-muted-foreground">
+              Max Docs (empty for all)
+            </label>
+            <Input 
+              type="number"
+              value={maxDocs} 
+              onChange={(e) => setMaxDocs(e.target.value)} 
+              placeholder="e.g. 100 for testing" 
+              className="h-9" 
+            />
+          </div>
+          <div className="pt-4 flex gap-2">
+            <Button onClick={handleIngest} className="flex-1">Start Ingestion</Button>
+            <Button variant="outline" onClick={() => setIngestModalOpen(false)}>Cancel</Button>
+          </div>
+        </div>
+      </DetailModal>
     </div>
   );
 }
