@@ -94,7 +94,7 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
         self._filtered_df = filtered
         return filtered
 
-    def _chunk_text(self, doc_id: str, text: str, metadata: dict) -> list[DatasetRecord]:
+    def _chunk_markdown(self, doc_id: str, markdown: str, metadata: dict) -> list[DatasetRecord]:
         """
         Simple sliding-window chunker for plain-text Vietnamese legal documents.
         Tries to split on paragraph breaks first, then falls back to fixed window.
@@ -104,7 +104,7 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
         ovl_chars = int(OVERLAP_TOKENS   * CHARS_PER_TOKEN)
 
         # Split on double newlines (paragraph boundaries)
-        paragraphs = [p.strip() for p in re.split(r'\n{2,}', text) if p.strip()]
+        paragraphs = [p.strip() for p in re.split(r'\n{2,}', markdown) if p.strip()]
 
         records: list[DatasetRecord] = []
         buffer  = ""
@@ -149,55 +149,50 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
         return len(meta)
 
     def iter_records(self) -> Iterator[DatasetRecord]:
-        meta = self._load_filtered_metadata()  # uses cache after total_records() call
+        meta = self._load_filtered_metadata()
         
-        # Create a fast lookup dictionary from the filtered metadata
-        meta_dict = meta.set_index("id").to_dict("index")
-        valid_ids = set(meta_dict.keys())
-
-        print(f"[hf_legal] Scanning content... (will filter down to {len(valid_ids):,} docs)")
-
-        if len(valid_ids) == 0:
-            print("[hf_legal] No documents matched the filters. Skipping scan.")
-            return
-
-        # Use streaming=True and direct parquet URL to prevent massive RAM/Disk usage
-        content_ds = load_dataset("parquet", data_files="hf://datasets/th1nhng0/vietnamese-legal-documents/legacy/content.parquet", split="train", streaming=True)
-
+        filtered_id_set = set(meta["id"].tolist())
+        meta_lookup = meta.set_index("id").to_dict("index")
+        total_needed = len(filtered_id_set)
         found = 0
-        total_to_find = len(valid_ids)
-        
-        for row in content_ds:
-            doc_id = str(row["id"])
-            if doc_id not in valid_ids:
+
+        print(f"[hf_legal] Streaming content for {total_needed} docs...")
+
+        content_ds = load_dataset(
+            "th1nhng0/vietnamese-legal-documents",
+            "content",
+            streaming=True,
+        )
+
+        for row in content_ds["data"]:
+            if row["id"] not in filtered_id_set:
                 continue
-                
+
             found += 1
-            if found % 10 == 0 or found == total_to_find:
-                print(f"[hf_legal] Content scan: {found}/{total_to_find} docs found")
-                
-            meta_row = meta_dict[doc_id]
+            if found % 10 == 0 or found == total_needed:
+                print(f"[hf_legal] Content scan: {found}/{total_needed} docs found")
+
+            meta_row = meta_lookup[row["id"]]
             metadata = {
-                "document_number": str(meta_row.get("document_number", "")),
-                "title": str(meta_row.get("title", "")),
-                "url": str(meta_row.get("url", "")),
-                "legal_type": str(meta_row.get("legal_type", "")),
-                "legal_sectors": str(meta_row.get("legal_sectors", "")),
-                "issuing_authority": str(meta_row.get("issuing_authority", "")),
-                "issuance_date": str(meta_row.get("issuance_date", "")),
-                "signers": str(meta_row.get("signers", ""))
+                "document_number":   meta_row.get("document_number", ""),
+                "title":             meta_row.get("title", ""),
+                "url":               meta_row.get("url", ""),
+                "legal_type":        meta_row.get("legal_type", ""),
+                "legal_sectors":     meta_row.get("legal_sectors", ""),
+                "issuing_authority": meta_row.get("issuing_authority", ""),
+                "issuance_date":     meta_row.get("issuance_date", ""),
+                "dataset":           "th1nhng0/vietnamese-legal-documents",
+                "type":              "legal",
             }
-            
+
             chunks = self._chunk_text(
-                doc_id=doc_id,
-                text=str(row.get("content") or ""),
+                doc_id=str(row["id"]),
+                text=row.get("content", ""),
                 metadata=metadata,
             )
             yield from chunks
-            
-            valid_ids.discard(doc_id)
-            if not valid_ids:
-                print(f"[hf_legal] All {total_to_find} docs found. Stopping stream early.")
+
+            filtered_id_set.discard(row["id"])
+            if not filtered_id_set:
+                print(f"[hf_legal] All {total_needed} docs found. Stopping stream early.")
                 break
-
-
