@@ -151,16 +151,16 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
     def iter_records(self) -> Iterator[DatasetRecord]:
         meta = self._load_filtered_metadata()
         
-        filtered_id_set = set(meta["id"].tolist())
-        meta_lookup = meta.set_index("id").to_dict("index")
+        filtered_id_set = set(str(i) for i in meta["id"].tolist())
+        meta_lookup = {str(k): v for k, v in meta.set_index("id").to_dict("index").items()}
         total_needed = len(filtered_id_set)
         found = 0
 
         print(f"[hf_legal] Streaming content for {total_needed} docs...")
 
         content_features = Features({
-            "id":      Value("int64"),
-            "content": Value("large_string"),
+            "id":           Value("string"),
+            "content_html": Value("string"),
         })
 
         content_ds = load_dataset(
@@ -171,14 +171,15 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
         )
 
         for row in content_ds["data"]:
-            if row["id"] not in filtered_id_set:
+            row_id = str(row["id"])
+            if row_id not in filtered_id_set:
                 continue
 
             found += 1
             if found % 10 == 0 or found == total_needed:
                 print(f"[hf_legal] Content scan: {found}/{total_needed} docs found")
 
-            meta_row = meta_lookup[row["id"]]
+            meta_row = meta_lookup[row_id]
             metadata = {
                 "document_number":   meta_row.get("document_number", ""),
                 "title":             meta_row.get("title", ""),
@@ -191,14 +192,14 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
                 "type":              "legal",
             }
 
-            chunks = self._chunk_text(
-                doc_id=str(row["id"]),
-                text=row.get("content", ""),
+            chunks = self._chunk_markdown(
+                doc_id=row_id,
+                markdown=row.get("content_html", ""),
                 metadata=metadata,
             )
             yield from chunks
 
-            filtered_id_set.discard(row["id"])
+            filtered_id_set.discard(row_id)
             if not filtered_id_set:
                 print(f"[hf_legal] All {total_needed} docs found. Stopping stream early.")
                 break
