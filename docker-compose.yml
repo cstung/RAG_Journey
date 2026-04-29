@@ -13,7 +13,7 @@ services:
       - ./data/hf_cache:/root/.cache/huggingface  # persist HF dataset cache
     depends_on:
       qdrant:
-        condition: service_healthy
+        condition: service_started
     deploy:
       resources:
         limits:
@@ -39,8 +39,3 @@ services:
         limits:
           memory: 8G
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
