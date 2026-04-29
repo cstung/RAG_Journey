@@ -140,30 +140,46 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
 
     def iter_records(self) -> Iterator[DatasetRecord]:
         meta = self._load_filtered_metadata()  # uses cache after total_records() call
+        
+        # Create a fast lookup dictionary from the filtered metadata
+        meta_dict = meta.set_index("id").to_dict("index")
+        valid_ids = set(meta_dict.keys())
 
-        print("[hf_legal] Loading legacy content (~518k docs plain text)...")
-        content_ds = load_dataset("th1nhng0/vietnamese-legal-documents", "legacy", split="content")
-        content_df = content_ds.to_pandas()
+        print(f"[hf_legal] Streaming legacy content... (will filter down to {len(valid_ids):,} docs)")
+        
+        # Use streaming=True to prevent massive RAM/Disk usage
+        content_ds = load_dataset("th1nhng0/vietnamese-legal-documents", "legacy", split="content", streaming=True)
 
-        # Join on id
-        df = meta.merge(content_df, on="id", how="inner")
-        print(f"[hf_legal] Joined {len(df):,} docs — starting chunking...")
-
-        for _, row in df.iterrows():
+        matched_count = 0
+        for row in content_ds:
+            doc_id = str(row["id"])
+            if doc_id not in valid_ids:
+                continue
+                
+            matched_count += 1
+            meta_row = meta_dict[doc_id]
+            
             metadata = {
-                "document_number":   str(row.get("document_number") or ""),
-                "title":             str(row.get("title") or ""),
-                "legal_type":        str(row.get("legal_type") or ""),
-                "legal_sectors":     str(row.get("legal_sectors") or ""),
-                "issuing_authority": str(row.get("issuing_authority") or ""),
-                "issuance_date":     str(row.get("issuance_date") or ""),
-                "signers":           str(row.get("signers") or ""),
+                "document_number":   str(meta_row.get("document_number") or ""),
+                "title":             str(meta_row.get("title") or ""),
+                "legal_type":        str(meta_row.get("legal_type") or ""),
+                "legal_sectors":     str(meta_row.get("legal_sectors") or ""),
+                "issuing_authority": str(meta_row.get("issuing_authority") or ""),
+                "issuance_date":     str(meta_row.get("issuance_date") or ""),
+                "signers":           str(meta_row.get("signers") or ""),
                 "dataset":           "th1nhng0/vietnamese-legal-documents",
                 "type":              "legal",
             }
             chunks = self._chunk_text(
-                doc_id=str(row["id"]),
+                doc_id=doc_id,
                 text=str(row.get("content") or ""),
                 metadata=metadata,
             )
             yield from chunks
+            
+            # Optimization: Stop streaming once we've found all our filtered docs
+            if matched_count >= len(valid_ids):
+                print("[hf_legal] Found all requested documents. Stopping stream.")
+                break
+
+
