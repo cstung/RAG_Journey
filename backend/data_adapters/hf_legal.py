@@ -62,7 +62,8 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
         print("[hf_legal] Loading legacy metadata (~518k docs)...")
         datasets.utils.logging.set_verbosity_info()
         datasets.utils.logging.enable_progress_bar()
-        ds   = load_dataset("th1nhng0/vietnamese-legal-documents", "legacy", split="metadata")
+        # Use direct parquet load to avoid downloading the 4GB content file just for metadata
+        ds   = load_dataset("parquet", data_files="hf://datasets/th1nhng0/vietnamese-legal-documents/legacy/metadata.parquet", split="train")
         meta = ds.to_pandas()
 
         # Sector filter — legal_sectors is a string field in the legacy config
@@ -150,8 +151,8 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
 
         print(f"[hf_legal] Streaming legacy content... (will filter down to {len(valid_ids):,} docs)")
         
-        # Use streaming=True to prevent massive RAM/Disk usage
-        content_ds = load_dataset("th1nhng0/vietnamese-legal-documents", "legacy", split="content", streaming=True)
+        # Use streaming=True and direct parquet URL to prevent massive RAM/Disk usage
+        content_ds = load_dataset("parquet", data_files="hf://datasets/th1nhng0/vietnamese-legal-documents/legacy/content.parquet", split="train", streaming=True)
 
         matched_count = 0
         for row in content_ds:
