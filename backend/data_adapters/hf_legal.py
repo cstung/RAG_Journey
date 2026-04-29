@@ -13,7 +13,7 @@ import re
 import hashlib
 from typing import Iterator
 import datasets
-from datasets import load_dataset
+from datasets import load_dataset, Features, Value
 import pandas as pd
 from .base import BaseDatasetConnector, DatasetRecord
 from vector_store import COLLECTION_LEGAL
@@ -158,10 +158,16 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
 
         print(f"[hf_legal] Streaming content for {total_needed} docs...")
 
+        content_features = Features({
+            "id":      Value("int64"),
+            "content": Value("large_string"),
+        })
+
         content_ds = load_dataset(
             "th1nhng0/vietnamese-legal-documents",
             "content",
             streaming=True,
+            features=content_features,
         )
 
         for row in content_ds["data"]:
