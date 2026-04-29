@@ -10,7 +10,6 @@ from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel
 import httpx
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 from fastapi import BackgroundTasks
 import json
 from pathlib import Path
@@ -18,7 +17,6 @@ from pathlib import Path
 from data_adapters import get_connector, REGISTRY
 from pipeline import IngestRunner
 
-_executor = ThreadPoolExecutor(max_workers=1)   # one ingestion at a time
 _ingest_state: dict = {}                        # in-memory progress cache
 
 class IngestRequest(BaseModel):
@@ -174,6 +172,9 @@ async def trigger_ingest(req: IngestRequest, background_tasks: BackgroundTasks):
     """Start ingestion in background. Returns immediately with job_id."""
     job_id = f"{req.dataset_id.replace('/', '_')}_{int(time.time())}"
 
+    # Set initial state NOW so status polls don't 404 before the thread starts
+    _ingest_state[job_id] = {"status": "queued", "embedded": 0, "total": 0}
+
     def run_job():
         try:
             connector = get_connector(
@@ -184,12 +185,19 @@ async def trigger_ingest(req: IngestRequest, background_tasks: BackgroundTasks):
                 max_docs=req.max_docs,
             )
             runner = IngestRunner(connector)
-            _ingest_state[job_id] = runner.get_progress()
-            runner.run(progress_callback=lambda s: _ingest_state.update({job_id: s}))
-        except Exception as e:
-            _ingest_state[job_id] = {"status": f"error: {e}"}
+            _ingest_state[job_id] = {**runner.get_progress(), "status": "running"}
 
-    background_tasks.add_task(lambda: asyncio.get_event_loop().run_in_executor(_executor, run_job))
+            def on_progress(state: dict):
+                _ingest_state[job_id] = state
+
+            runner.run(progress_callback=on_progress)
+            _ingest_state[job_id] = {**_ingest_state.get(job_id, {}), "status": "completed"}
+        except Exception as e:
+            _ingest_state[job_id] = {"status": f"error: {e}", "embedded": 0, "total": 0}
+            print(f"[Ingest] Job {job_id} failed: {e}")
+
+    # FastAPI's BackgroundTasks runs sync callables in a threadpool — no executor wrapping needed
+    background_tasks.add_task(run_job)
     return {"job_id": job_id, "status": "queued"}
 
 @app.get("/api/admin/datasets/status/{job_id}")
