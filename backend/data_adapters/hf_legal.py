@@ -21,10 +21,14 @@ from vector_store import COLLECTION_LEGAL
 
 # ── Filter presets ─────────────────────────────────────────────────────────────
 DEFAULT_SECTORS = [
-    "Information technology",
-    "Employment",
-    "Taxes",
-    "Enterprise",
+    "Employment - Wages",
+    "Government finance",
+    "Taxes - Fees - Charges",
+    "Business",
+    "Investment",
+    "Accounting",
+    "Insurance",
+    "Trade",
 ]
 DEFAULT_MIN_YEAR = 2000
 
