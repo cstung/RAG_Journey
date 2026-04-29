@@ -211,11 +211,22 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
                     "type":              "legal",
                 }
 
+                print(f"[hf_legal] Processing doc {norm_id} | content_html len: {len(content or '')}")
+                
+                from ingest import extract_html_text
+                parsed_text = extract_html_text(content or "")
+                
+                print(f"[hf_legal] Parsed text len: {len(parsed_text)} | Sample: {parsed_text[:100]}...")
+
                 chunks = self._chunk_markdown(
                     doc_id=str(norm_id),
-                    markdown=content or "",
+                    markdown=parsed_text,
                     metadata=metadata,
                 )
+                
+                num_chunks = len(chunks)
+                print(f"[hf_legal] Created {num_chunks} chunks for doc {norm_id}")
+                
                 yield from chunks
 
                 filtered_id_set.discard(norm_id)

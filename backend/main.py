@@ -448,6 +448,20 @@ def chat(req: ChatRequest, request: Request):
     
     # 1. Save user message to history
     if req.session_id:
+        # Defensive fix: Ensure session exists to avoid FOREIGN KEY constraint failed
+        if not session_exists(req.session_id):
+            print(f"[Chat] Warning: Session {req.session_id} not found in DB. Creating it now.")
+            try:
+                create_session(user_name="AutoCreated", user_lang="vi")
+                # Wait: uuid is random, we can't 'guess' what the client has.
+                # If the client sent a specific ID, we must insert it as-is.
+                from database import get_db
+                conn = get_db()
+                conn.execute("INSERT OR IGNORE INTO sessions (id, user_name) VALUES (?, ?)", (req.session_id, "User"))
+                conn.commit()
+            except Exception as e:
+                print(f"[Chat] Error ensuring session exists: {e}")
+
         try:
             add_message(req.session_id, "user", cleaned_question.strip())
         except Exception as e:

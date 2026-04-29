@@ -265,11 +265,18 @@ def extract_docx_text(filepath: str) -> str:
 
 
 def extract_html_text(html: str) -> str:
-    soup = BeautifulSoup(html or "", "html.parser")
+    if not html or not html.strip():
+        return ""
+    
+    soup = BeautifulSoup(html, "html.parser")
     for tag in soup(["script", "style", "noscript", "header", "footer", "nav", "aside"]):
         tag.decompose()
 
-    main = soup.find("article") or soup.find("main") or soup.body or soup
+    # More permissive extraction: try article/main, then fall back to body, then the whole soup
+    main = soup.find("article") or soup.find("main") or soup.find(id="content") or soup.find(class_="content")
+    if not main:
+        main = soup.body or soup
+    
     text = main.get_text("\n", strip=True)
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     return "\n".join(lines).strip()
