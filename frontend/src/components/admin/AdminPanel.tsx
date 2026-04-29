@@ -1019,7 +1019,7 @@ function DatasetsTab({
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await guard(`/api/datasets`);
+      const res = await guard(`/api/admin/datasets`);
       const data = await res.json();
       setDatasets(data.datasets || []);
     } catch (e) {
@@ -1036,7 +1036,7 @@ function DatasetsTab({
   const pollJob = useCallback((jobId: string) => {
     const interval = setInterval(async () => {
       try {
-        const res = await guard(`/api/datasets/status/${jobId}`);
+        const res = await guard(`/api/admin/datasets/status/${jobId}`);
         const state = await res.json();
         
         setActiveJobs((prev) => {
@@ -1075,7 +1075,7 @@ function DatasetsTab({
     if (!isNaN(maxD)) config.max_docs = maxD;
 
     try {
-      const res = await guard("/api/datasets/ingest", {
+      const res = await guard("/api/admin/datasets/ingest", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(config)

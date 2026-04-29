@@ -169,7 +169,7 @@ class DocumentUpdateRequest(BaseModel):
     category: str
 
 
-@app.post("/api/datasets/ingest")
+@app.post("/api/admin/datasets/ingest")
 async def trigger_ingest(req: IngestRequest, background_tasks: BackgroundTasks,
                          _=Depends(verify_admin)):
     """Start ingestion in background. Returns immediately with job_id."""
@@ -193,7 +193,7 @@ async def trigger_ingest(req: IngestRequest, background_tasks: BackgroundTasks,
     background_tasks.add_task(lambda: asyncio.get_event_loop().run_in_executor(_executor, run_job))
     return {"job_id": job_id, "status": "queued"}
 
-@app.get("/api/datasets/status/{job_id}")
+@app.get("/api/admin/datasets/status/{job_id}")
 async def ingest_status(job_id: str, _=Depends(verify_admin)):
     state = _ingest_state.get(job_id)
     if state is None:
@@ -205,7 +205,7 @@ async def ingest_status(job_id: str, _=Depends(verify_admin)):
             raise HTTPException(404, "Job not found")
     return state
 
-@app.get("/api/datasets")
+@app.get("/api/admin/datasets")
 async def list_datasets():
     return {"datasets": list(REGISTRY.keys())}
 
