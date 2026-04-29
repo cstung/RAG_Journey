@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Dataset Management - Admin</title>
+    <style>
+        :root {
+            --bg: #fdfbf7;
+            --primary: #FF5A5F;
+            --text: #1a1a1a;
+            --border: 3px solid #1a1a1a;
+            --shadow: 4px 4px 0px #1a1a1a;
+        }
+        body {
+            font-family: 'Space Grotesk', system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            margin: 2rem;
+            line-height: 1.5;
+        }
+        h1, h2 {
+            text-transform: uppercase;
+        }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .card {
+            background: white;
+            border: var(--border);
+            box-shadow: var(--shadow);
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            border-radius: 4px;
+        }
+        .btn {
+            background: var(--primary);
+            color: white;
+            border: var(--border);
+            padding: 0.5rem 1rem;
+            font-weight: bold;
+            cursor: pointer;
+            box-shadow: 2px 2px 0px #1a1a1a;
+            text-transform: uppercase;
+            transition: transform 0.1s;
+        }
+        .btn:active { transform: translate(2px, 2px); box-shadow: none; }
+        .btn.secondary { background: white; color: var(--text); }
+        
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem; }
+        .dataset-card {
+            border: var(--border);
+            padding: 1rem;
+            background: #eef2ff;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            border: var(--border);
+            background: white;
+        }
+        th, td {
+            border: var(--border);
+            padding: 0.75rem;
+            text-align: left;
+        }
+        th { background: #1a1a1a; color: white; }
+        
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.5);
+            align-items: center; justify-content: center;
+        }
+        .modal.open { display: flex; }
+        .modal-content {
+            background: white;
+            border: var(--border);
+            box-shadow: var(--shadow);
+            padding: 2rem;
+            width: 400px;
+            max-width: 90vw;
+        }
+        .form-group { margin-bottom: 1rem; }
+        label { display: block; font-weight: bold; margin-bottom: 0.5rem; }
+        input, select {
+            width: 100%;
+            padding: 0.5rem;
+            border: var(--border);
+            box-sizing: border-box;
+        }
+        .progress-bar {
+            height: 20px;
+            border: 2px solid #1a1a1a;
+            background: #eee;
+            margin-top: 5px;
+        }
+        .progress-fill {
+            height: 100%;
+            background: #4ade80;
+            width: 0%;
+            transition: width 0.3s;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📦 Dataset Management</h1>
+        <a href="/" class="btn secondary" style="display:inline-block; margin-bottom:1rem; text-decoration:none;">&larr; Back to Dashboard</a>
+
+        <div class="card">
+            <h2>Available Datasets</h2>
+            <div id="datasets-grid" class="grid">
+                Loading datasets...
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Active Jobs</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Job ID</th>
+                        <th>Status</th>
+                        <th>Embedded / Total</th>
+                        <th>Progress</th>
+                    </tr>
+                </thead>
+                <tbody id="jobs-tbody">
+                    <!-- Populated dynamically -->
+                </tbody>
+            </table>
+        </div>
+
+        <div class="card">
+            <h2>Collections Status</h2>
+            <button class="btn secondary" onclick="loadStats()">Refresh Stats</button>
+            <p id="stats-info" style="margin-top: 1rem; font-weight: bold;"></p>
+        </div>
+    </div>
+
+    <!-- Ingest Modal -->
+    <div id="ingest-modal" class="modal">
+        <div class="modal-content">
+            <h2 id="modal-title">Configure Ingest</h2>
+            <form id="ingest-form" onsubmit="submitIngest(event)">
+                <input type="hidden" id="ingest-dataset-id">
+                
+                <div class="form-group">
+                    <label>Sectors (comma separated)</label>
+                    <input type="text" id="ingest-sectors" placeholder="Lao động, Thuế">
+                </div>
+                
+                <div class="form-group">
+                    <label>Min Year</label>
+                    <input type="number" id="ingest-min-year" value="2000">
+                </div>
+                
+                <div class="form-group">
+                    <label>Legal Types (comma separated)</label>
+                    <input type="text" id="ingest-legal-types" placeholder="Nghị định, Thông tư">
+                </div>
+                
+                <div class="form-group">
+                    <label>Max Docs (empty for all)</label>
+                    <input type="number" id="ingest-max-docs" placeholder="e.g. 100 for testing">
+                </div>
+
+                <div style="display: flex; gap: 1rem; margin-top: 2rem;">
+                    <button type="submit" class="btn">Start Ingest</button>
+                    <button type="button" class="btn secondary" onclick="closeModal()">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const API = "";
+        let ADMIN_TOKEN = localStorage.getItem("admin_token") || "";
+
+        if (!ADMIN_TOKEN) {
+            alert("Vui lòng đăng nhập admin trước.");
+            window.location.href = "/";
+        }
+
+        async function fetchAPI(url, options = {}) {
+            options.headers = { ...options.headers, "Authorization": `Bearer ${ADMIN_TOKEN}` };
+            const res = await fetch(url, options);
+            if (res.status === 401) {
+                alert("Token hết hạn. Vui lòng đăng nhập lại.");
+                window.location.href = "/";
+            }
+            return res.json();
+        }
+
+        async function loadDatasets() {
+            const data = await fetchAPI("/api/datasets");
+            const grid = document.getElementById("datasets-grid");
+            grid.innerHTML = "";
+            data.datasets.forEach(ds => {
+                const div = document.createElement("div");
+                div.className = "dataset-card";
+                div.innerHTML = `
+                    <h3>${ds}</h3>
+                    <button class="btn" onclick="openModal('${ds}')">Ingest</button>
+                `;
+                grid.appendChild(div);
+            });
+        }
+
+        function openModal(datasetId) {
+            document.getElementById("modal-title").innerText = `Ingest: ${datasetId}`;
+            document.getElementById("ingest-dataset-id").value = datasetId;
+            document.getElementById("ingest-modal").classList.add("open");
+        }
+
+        function closeModal() {
+            document.getElementById("ingest-modal").classList.remove("open");
+        }
+
+        async function submitIngest(e) {
+            e.preventDefault();
+            const datasetId = document.getElementById("ingest-dataset-id").value;
+            const sectors = document.getElementById("ingest-sectors").value.split(",").map(s => s.trim()).filter(Boolean);
+            const min_year = parseInt(document.getElementById("ingest-min-year").value) || 2000;
+            const legal_types = document.getElementById("ingest-legal-types").value.split(",").map(s => s.trim()).filter(Boolean);
+            const max_docs = parseInt(document.getElementById("ingest-max-docs").value) || null;
+
+            const config = {
+                dataset_id: datasetId,
+                min_year: min_year,
+            };
+            if (sectors.length) config.sectors = sectors;
+            if (legal_types.length) config.legal_types = legal_types;
+            if (max_docs) config.max_docs = max_docs;
+
+            closeModal();
+
+            const res = await fetchAPI("/api/datasets/ingest", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(config)
+            });
+
+            if (res.job_id) {
+                pollJob(res.job_id);
+            } else {
+                alert("Failed to start job: " + JSON.stringify(res));
+            }
+        }
+
+        const activeJobs = new Set();
+
+        function pollJob(jobId) {
+            if (activeJobs.has(jobId)) return;
+            activeJobs.add(jobId);
+            
+            const tbody = document.getElementById("jobs-tbody");
+            const tr = document.createElement("tr");
+            tr.id = `job-${jobId}`;
+            tr.innerHTML = `
+                <td>${jobId}</td>
+                <td class="status">queued</td>
+                <td class="counts">0 / 0</td>
+                <td>
+                    <div class="progress-bar"><div class="progress-fill" style="width: 0%"></div></div>
+                </td>
+            `;
+            tbody.appendChild(tr);
+
+            const interval = setInterval(async () => {
+                try {
+                    const state = await fetchAPI(`/api/datasets/status/${jobId}`);
+                    const statusTd = tr.querySelector(".status");
+                    const countsTd = tr.querySelector(".counts");
+                    const fill = tr.querySelector(".progress-fill");
+
+                    statusTd.innerText = state.status || "unknown";
+                    countsTd.innerText = `${state.embedded || 0} / ${state.total || 0}`;
+                    
+                    if (state.total > 0) {
+                        const pct = Math.min(100, Math.round((state.embedded / state.total) * 100));
+                        fill.style.width = `${pct}%`;
+                    }
+
+                    if (state.status === "completed" || (state.status && state.status.startsWith("error"))) {
+                        clearInterval(interval);
+                        activeJobs.delete(jobId);
+                    }
+                } catch (e) {
+                    console.error("Polling error", e);
+                }
+            }, 3000);
+        }
+
+        async function loadStats() {
+            const data = await fetchAPI("/api/admin/stats");
+            document.getElementById("stats-info").innerText = `Total Points (All Collections): ${data.total_chunks}`;
+        }
+
+        // Init
+        loadDatasets();
+        loadStats();
+    </script>
+</body>
+</html>

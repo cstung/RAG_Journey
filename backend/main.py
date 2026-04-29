@@ -3,12 +3,31 @@ import os, shutil
 import re
 import time
 from urllib.parse import urlparse
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends, Header, Request
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends, Header, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel
 import httpx
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from fastapi import BackgroundTasks
+import json
+from pathlib import Path
+
+from datasets import get_connector, REGISTRY
+from pipeline import IngestRunner
+
+_executor = ThreadPoolExecutor(max_workers=1)   # one ingestion at a time
+_ingest_state: dict = {}                        # in-memory progress cache
+
+class IngestRequest(BaseModel):
+    dataset_id: str                              # e.g. "th1nhng0/vietnamese-legal-documents"
+    sectors:    list[str] | None = None
+    min_year:   int              = 2000
+    legal_types: list[str] | None = None
+    max_docs:   int | None = None                # set to 100 for smoke test
+
 from vector_store import get_client, count_points, delete_points_by_file, clear_collection, COLLECTION_PDF, COLLECTION_LEGAL
 from admin_auth import create_admin_token, verify_admin_token
 from emailer import get_notify_emails, send_email
@@ -38,7 +57,7 @@ from database import (
     session_exists,
     verify_admin_credentials,
 )
-from rag import query as rag_query, rebuild_index, get_departments
+from rag import answer, query as rag_query, rebuild_index, get_departments
 from ingest import ingest_all, ingest_file, extract_html_text
 from middleware.rate_limit import ip_limiter, session_limiter
 from utils.input_guard import sanitise_question
@@ -108,9 +127,11 @@ def _file_id_for_path(filepath: str) -> str:
 
 
 class ChatRequest(BaseModel):
-    question:   str
-    session_id: str | None = None
-    department: str = "all"
+    question:    str
+    collections: list[str] | None = None   # NEW: optional override
+    filters:     dict | None = None         # NEW: e.g. {"legal_type": "Nghị định"}
+    session_id:  str | None = None
+    department:  str = "all"
 
 
 class SessionStartRequest(BaseModel):
@@ -147,6 +168,46 @@ class DocumentUpdateRequest(BaseModel):
     department: str
     category: str
 
+
+@app.post("/api/datasets/ingest")
+async def trigger_ingest(req: IngestRequest, background_tasks: BackgroundTasks,
+                         _=Depends(verify_admin)):
+    """Start ingestion in background. Returns immediately with job_id."""
+    job_id = f"{req.dataset_id.replace('/', '_')}_{int(time.time())}"
+
+    def run_job():
+        try:
+            connector = get_connector(
+                req.dataset_id,
+                sectors=req.sectors,
+                min_year=req.min_year,
+                legal_types=req.legal_types,
+                max_docs=req.max_docs,
+            )
+            runner = IngestRunner(connector)
+            _ingest_state[job_id] = runner.get_progress()
+            runner.run(progress_callback=lambda s: _ingest_state.update({job_id: s}))
+        except Exception as e:
+            _ingest_state[job_id] = {"status": f"error: {e}"}
+
+    background_tasks.add_task(lambda: asyncio.get_event_loop().run_in_executor(_executor, run_job))
+    return {"job_id": job_id, "status": "queued"}
+
+@app.get("/api/datasets/status/{job_id}")
+async def ingest_status(job_id: str, _=Depends(verify_admin)):
+    state = _ingest_state.get(job_id)
+    if state is None:
+        # Try reading from disk (survive restarts)
+        state_file = Path(f"data/ingest_state/{job_id}.json")
+        if state_file.exists():
+            state = json.loads(state_file.read_text())
+        else:
+            raise HTTPException(404, "Job not found")
+    return state
+
+@app.get("/api/datasets")
+async def list_datasets():
+    return {"datasets": list(REGISTRY.keys())}
 
 @app.get("/api/health")
 def health():
@@ -378,11 +439,12 @@ def chat(req: ChatRequest, request: Request):
             print(f"[Chat] Warning: could not save user message: {e}")
 
     # 2. Run RAG Pipeline
-    result = rag_query(
+    result = answer(
         question=cleaned_question.strip(),
-        session_id=req.session_id,
-        department=dept
+        collections=req.collections,
+        filters=req.filters,
     )
+    result["rewritten_query"] = result.get("rewritten_query", cleaned_question.strip())
 
     # 3. Save assistant message to history
     if req.session_id:
@@ -768,3 +830,19 @@ else:
     )
     if _STATIC_DIR:
         app.mount("/", SPAStaticFiles(directory=_STATIC_DIR, html=True), name="static")
+
+@app.post("/api/admin/eval")
+async def run_eval(_=Depends(verify_admin)):
+    """Run RAGAS eval in background, return results path."""
+    import subprocess
+    proc = subprocess.Popen(
+        ["python", "eval/run_eval.py"],
+        cwd=os.path.dirname(__file__),
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
+    stdout, stderr = proc.communicate(timeout=300)
+    return {"stdout": stdout.decode(), "stderr": stderr.decode()}
+
+@app.get("/admin/datasets")
+async def admin_datasets_page():
+    return FileResponse(os.path.join(os.path.dirname(__file__), "static", "admin_datasets.html"))
