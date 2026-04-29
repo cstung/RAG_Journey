@@ -12,6 +12,7 @@ Uses the 'legacy' config which has English field names and plain-text content:
 import re
 import hashlib
 from typing import Iterator
+import datasets
 from datasets import load_dataset
 import pandas as pd
 from .base import BaseDatasetConnector, DatasetRecord
@@ -59,6 +60,8 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
             return self._filtered_df
 
         print("[hf_legal] Loading legacy metadata (~518k docs)...")
+        datasets.utils.logging.set_verbosity_info()
+        datasets.utils.logging.enable_progress_bar()
         ds   = load_dataset("th1nhng0/vietnamese-legal-documents", "legacy", split="metadata")
         meta = ds.to_pandas()
 
