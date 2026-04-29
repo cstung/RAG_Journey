@@ -21,10 +21,11 @@ openai_client = OpenAI()
 
 class IngestRunner:
 
-    def __init__(self, connector: BaseDatasetConnector):
-        self.connector  = connector
+    def __init__(self, connector: BaseDatasetConnector, job_id: str):
+        self.connector = connector
         self.collection = connector.collection_name
-        self.state_file = STATE_DIR / f"{self.collection}.json"
+        self.job_id = job_id
+        self.state_file = STATE_DIR / f"{self.job_id}.json"
         STATE_DIR.mkdir(parents=True, exist_ok=True)
         self._state = self._load_state()
 

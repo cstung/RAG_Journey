@@ -155,14 +155,15 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
         meta_dict = meta.set_index("id").to_dict("index")
         valid_ids = set(meta_dict.keys())
 
-        print(f"[hf_legal] Streaming legacy content... (will filter down to {len(valid_ids):,} docs)")
+        print(f"[hf_legal] Scanning content... (will filter down to {len(valid_ids):,} docs)")
 
         if len(valid_ids) == 0:
-            print("[hf_legal] No documents matched the filters. Skipping stream.")
+            print("[hf_legal] No documents matched the filters. Skipping scan.")
             return
 
-        # Use streaming=True and direct parquet URL to prevent massive RAM/Disk usage
-        content_ds = load_dataset("parquet", data_files="hf://datasets/th1nhng0/vietnamese-legal-documents/legacy/content.parquet", split="train", streaming=True)
+        # Use streaming=False to download the 3.6GB file locally ONCE to the persistent volume.
+        # This prevents PyArrow HTTP range request timeouts/OOMs and makes future runs instant.
+        content_ds = load_dataset("parquet", data_files="hf://datasets/th1nhng0/vietnamese-legal-documents/legacy/content.parquet", split="train", streaming=False)
 
         matched_count = 0
         for row in content_ds:

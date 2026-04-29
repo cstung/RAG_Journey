@@ -186,7 +186,7 @@ async def trigger_ingest(req: IngestRequest, background_tasks: BackgroundTasks):
                 legal_types=req.legal_types,
                 max_docs=req.max_docs,
             )
-            runner = IngestRunner(connector)
+            runner = IngestRunner(connector, job_id=job_id)
 
             def on_progress(state: dict):
                 _ingest_state[job_id] = state
