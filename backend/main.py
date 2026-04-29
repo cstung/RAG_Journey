@@ -15,7 +15,7 @@ from fastapi import BackgroundTasks
 import json
 from pathlib import Path
 
-from datasets import get_connector, REGISTRY
+from data_adapters import get_connector, REGISTRY
 from pipeline import IngestRunner
 
 _executor = ThreadPoolExecutor(max_workers=1)   # one ingestion at a time

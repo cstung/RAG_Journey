@@ -8,7 +8,7 @@ import json, os, time, asyncio
 from pathlib import Path
 from openai import OpenAI
 from qdrant_client.models import PointStruct
-from datasets.base import BaseDatasetConnector, DatasetRecord
+from data_adapters.base import BaseDatasetConnector, DatasetRecord
 from vector_store import get_client, ensure_collection, upsert_points, EMBEDDING_DIM
 
 STATE_DIR    = Path("data/ingest_state")
