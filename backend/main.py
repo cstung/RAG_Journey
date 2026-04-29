@@ -822,15 +822,18 @@ async def run_eval(_=Depends(verify_admin)):
 
 @app.get("/admin/datasets")
 async def admin_datasets_page():
-    return FileResponse(os.path.join(os.path.dirname(__file__), "static", "admin_datasets.html"))
+    # Check protected location first, then fallback to local static
+    for p in ["/frontend_dist/admin_datasets.html", os.path.join(os.path.dirname(__file__), "static", "admin_datasets.html")]:
+        if os.path.exists(p):
+            return FileResponse(p)
+    raise HTTPException(404, "Admin page not found")
 
 
 # Prefer serving the built React frontend when present.
-# - Local dev build:   <repo>/frontend/dist
-# - Optional copy-in:  <repo>/backend/frontend/dist
 _BACKEND_DIR = os.path.dirname(__file__)
 _FRONTEND_DIST = _first_existing_dir(
     [
+        "/frontend_dist",
         os.path.join(_BACKEND_DIR, "frontend", "dist"),
         os.path.abspath(os.path.join(_BACKEND_DIR, "..", "frontend", "dist")),
     ]

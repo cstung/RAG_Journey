@@ -24,12 +24,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy backend application code
 COPY backend/ /app/
 
-# Copy the built React frontend
-COPY --from=frontend-builder /app/frontend/dist /app/static
+# Copy the built React frontend to a location that won't be clobbered by the /app volume
+COPY --from=frontend-builder /app/frontend/dist /frontend_dist
 
-# Ensure admin UI and other static assets from backend are preserved
-COPY backend/static/admin_datasets.html /app/static/admin_datasets.html
-COPY backend/static/index.html /app/static/legacy_index.html
+# Ensure admin UI is also in that protected location
+COPY backend/static/admin_datasets.html /frontend_dist/admin_datasets.html
 
 EXPOSE 8000
 
