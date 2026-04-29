@@ -21,8 +21,10 @@ from vector_store import COLLECTION_LEGAL
 
 # ── Filter presets ─────────────────────────────────────────────────────────────
 DEFAULT_SECTORS = [
-    "Lao động", "Thuế", "Tài chính", "Kế toán", "Doanh nghiệp",
-    "Đầu tư", "Bảo hiểm", "Ngân hàng", "Thương mại",
+    "Information technology",
+    "Employment",
+    "Taxes",
+    "Enterprise",
 ]
 DEFAULT_MIN_YEAR = 2000
 
@@ -150,7 +152,11 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
         valid_ids = set(meta_dict.keys())
 
         print(f"[hf_legal] Streaming legacy content... (will filter down to {len(valid_ids):,} docs)")
-        
+
+        if len(valid_ids) == 0:
+            print("[hf_legal] No documents matched the filters. Skipping stream.")
+            return
+
         # Use streaming=True and direct parquet URL to prevent massive RAM/Disk usage
         content_ds = load_dataset("parquet", data_files="hf://datasets/th1nhng0/vietnamese-legal-documents/legacy/content.parquet", split="train", streaming=True)
 

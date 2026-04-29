@@ -1207,7 +1207,7 @@ function DatasetsTab({
             <Input 
               value={sectors} 
               onChange={(e) => setSectors(e.target.value)} 
-              placeholder="Lao động, Thuế" 
+              placeholder="Employment, Taxes" 
               className="h-9" 
             />
           </div>
