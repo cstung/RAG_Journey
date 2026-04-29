@@ -15,6 +15,9 @@ from typing import Iterator
 import datasets
 from datasets import load_dataset, Features, Value
 import pandas as pd
+import pyarrow.parquet as pq
+from huggingface_hub import hf_hub_download
+import os
 from .base import BaseDatasetConnector, DatasetRecord
 from vector_store import COLLECTION_LEGAL
 
@@ -94,6 +97,24 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
         self._filtered_df = filtered
         return filtered
 
+    def _load_content_direct(self) -> "pyarrow.Table":
+        """
+        Download content.parquet once via huggingface_hub and read with PyArrow.
+        Bypasses datasets library cast issue with large_string columns.
+        File is cached at HF_HOME so subsequent calls are instant.
+        """
+        print("[hf_legal] Downloading content parquet directly (large_string safe)...")
+        parquet_path = hf_hub_download(
+            repo_id="th1nhng0/vietnamese-legal-documents",
+            filename="data/content.parquet",
+            repo_type="dataset",
+            cache_dir=os.getenv("HF_HOME", "/app/data/hf_cache"),
+        )
+        print(f"[hf_legal] Reading parquet from: {parquet_path}")
+        table = pq.read_table(parquet_path)
+        print(f"[hf_legal] Parquet schema: {table.schema}")
+        return table
+
     def _chunk_markdown(self, doc_id: str, markdown: str, metadata: dict) -> list[DatasetRecord]:
         """
         Simple sliding-window chunker for plain-text Vietnamese legal documents.
@@ -150,56 +171,54 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
 
     def iter_records(self) -> Iterator[DatasetRecord]:
         meta = self._load_filtered_metadata()
-        
-        filtered_id_set = set(str(i) for i in meta["id"].tolist())
-        meta_lookup = {str(k): v for k, v in meta.set_index("id").to_dict("index").items()}
+        filtered_id_set = set(meta["id"].tolist())
+        meta_lookup = meta.set_index("id").to_dict("index")
         total_needed = len(filtered_id_set)
         found = 0
 
-        print(f"[hf_legal] Streaming content for {total_needed} docs...")
+        table = self._load_content_direct()
 
-        content_features = Features({
-            "id":           Value("string"),
-            "content_html": Value("string"),
-        })
+        # Detect actual column name (content vs content_html)
+        content_col = "content" if "content" in table.schema.names else "content_html"
+        id_col = "id"
+        print(f"[hf_legal] Using columns: id='{id_col}', content='{content_col}'")
+        print(f"[hf_legal] Streaming {table.num_rows:,} rows for {total_needed} docs...")
 
-        content_ds = load_dataset(
-            "th1nhng0/vietnamese-legal-documents",
-            "content",
-            streaming=True,
-            features=content_features,
-        )
+        for batch in table.to_batches(max_chunksize=1000):
+            batch_ids = batch.column(id_col).to_pylist()
+            batch_contents = batch.column(content_col).to_pylist()
 
-        for row in content_ds["data"]:
-            row_id = str(row["id"])
-            if row_id not in filtered_id_set:
-                continue
+            for row_id, content in zip(batch_ids, batch_contents):
+                # Normalize id type (parquet may store as string or int)
+                norm_id = int(row_id) if isinstance(row_id, str) and row_id.isdigit() else row_id
+                if norm_id not in filtered_id_set:
+                    continue
 
-            found += 1
-            if found % 10 == 0 or found == total_needed:
-                print(f"[hf_legal] Content scan: {found}/{total_needed} docs found")
+                found += 1
+                if found % 10 == 0 or found == total_needed:
+                    print(f"[hf_legal] Content scan: {found}/{total_needed} docs found")
 
-            meta_row = meta_lookup[row_id]
-            metadata = {
-                "document_number":   meta_row.get("document_number", ""),
-                "title":             meta_row.get("title", ""),
-                "url":               meta_row.get("url", ""),
-                "legal_type":        meta_row.get("legal_type", ""),
-                "legal_sectors":     meta_row.get("legal_sectors", ""),
-                "issuing_authority": meta_row.get("issuing_authority", ""),
-                "issuance_date":     meta_row.get("issuance_date", ""),
-                "dataset":           "th1nhng0/vietnamese-legal-documents",
-                "type":              "legal",
-            }
+                meta_row = meta_lookup[norm_id]
+                metadata = {
+                    "document_number":   meta_row.get("document_number", ""),
+                    "title":             meta_row.get("title", ""),
+                    "url":               meta_row.get("url", ""),
+                    "legal_type":        meta_row.get("legal_type", ""),
+                    "legal_sectors":     meta_row.get("legal_sectors", ""),
+                    "issuing_authority": meta_row.get("issuing_authority", ""),
+                    "issuance_date":     meta_row.get("issuance_date", ""),
+                    "dataset":           "th1nhng0/vietnamese-legal-documents",
+                    "type":              "legal",
+                }
 
-            chunks = self._chunk_markdown(
-                doc_id=row_id,
-                markdown=row.get("content_html", ""),
-                metadata=metadata,
-            )
-            yield from chunks
+                chunks = self._chunk_markdown(
+                    doc_id=str(norm_id),
+                    markdown=content or "",
+                    metadata=metadata,
+                )
+                yield from chunks
 
-            filtered_id_set.discard(row_id)
-            if not filtered_id_set:
-                print(f"[hf_legal] All {total_needed} docs found. Stopping stream early.")
-                break
+                filtered_id_set.discard(norm_id)
+                if not filtered_id_set:
+                    print(f"[hf_legal] All {total_needed} docs found. Done.")
+                    return
