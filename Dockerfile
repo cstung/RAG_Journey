@@ -24,9 +24,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy backend application code
 COPY backend/ /app/
 
-# Copy the built React frontend from Stage 1 into the backend's static directory
-# This ensures FastAPI serves the React app instead of the legacy Vanilla JS files
+# Copy the built React frontend
 COPY --from=frontend-builder /app/frontend/dist /app/static
+
+# Ensure admin UI and other static assets from backend are preserved
+COPY backend/static/admin_datasets.html /app/static/admin_datasets.html
+COPY backend/static/index.html /app/static/legacy_index.html
 
 EXPOSE 8000
 

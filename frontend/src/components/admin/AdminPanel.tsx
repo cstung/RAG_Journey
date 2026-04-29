@@ -13,6 +13,7 @@ import {
   RefreshCw,
   Trash2,
   Upload,
+  Database,
 } from "lucide-react";
 import { adminFetch } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -20,7 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 
-type Tab = "dashboard" | "conversations" | "negative" | "documents" | "notifications";
+type Tab = "dashboard" | "conversations" | "negative" | "documents" | "notifications" | "datasets";
 
 const TABS: { id: Tab; label: string; icon: typeof BarChart3 }[] = [
   { id: "dashboard", label: "Dashboard", icon: BarChart3 },
@@ -28,6 +29,7 @@ const TABS: { id: Tab; label: string; icon: typeof BarChart3 }[] = [
   { id: "negative", label: "Negative", icon: Bell },
   { id: "documents", label: "Documents", icon: FolderOpen },
   { id: "notifications", label: "Emails", icon: Mail },
+  { id: "datasets", label: "Datasets", icon: Database },
 ];
 
 interface AdminPanelProps {
@@ -199,6 +201,15 @@ export function AdminPanel({ token, departments, onStatsRefresh, onTokenInvalid 
             <DocumentsTab guard={guard} setStatus={setStatus} onStatsRefresh={onStatsRefresh} />
           )}
           {tab === "notifications" && <EmailsTab guard={guard} setStatus={setStatus} />}
+          {tab === "datasets" && (
+            <div className="h-[600px] w-full overflow-hidden rounded-2xl border border-border bg-card shadow-soft">
+              <iframe 
+                src="/admin/datasets" 
+                className="h-full w-full border-none"
+                title="Dataset Management"
+              />
+            </div>
+          )}
         </div>
       </div>
     </section>
