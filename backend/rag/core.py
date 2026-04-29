@@ -4,21 +4,30 @@ from openai import OpenAI
 from rank_bm25 import BM25Okapi
 
 from database import get_recent_messages
-from db import collection
+from vector_store import get_client, search, COLLECTION_PDF, COLLECTION_LEGAL, count_points
+from qdrant_client.models import Filter, FieldCondition, MatchValue
 from language import detect_language
 from .chunk_sanitiser import sanitise_chunk
 from .citation_checker import extract_and_check_citation
 from .confidence_parser import extract_confidence
 from .output_guard import validate_output
 from .prompt_builder import build_prompt
-from .retrieval_gate import NO_RESULTS_SENTINEL, SIMILARITY_THRESHOLD, BM25_MIN_SCORE, filter_chunks, is_relevant
+from .retrieval_gate import (
+    NO_RESULTS_SENTINEL, 
+    SIMILARITY_THRESHOLD, 
+    BM25_MIN_SCORE, 
+    RETRIEVE_N, 
+    TOP_K,
+    LLM_TEMPERATURE,
+    filter_chunks, 
+    is_relevant
+)
 
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 COMPANY_NAME = os.getenv("COMPANY_NAME", "cong ty")
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
-TOP_K = int(os.getenv("TOP_K", "6"))
-RETRIEVE_N = 15
+
 
 NO_DOCS_MESSAGES = {
     "vi": "Chua co tai lieu nao. Vui long upload tai lieu truoc.",
@@ -45,18 +54,26 @@ class BM25Index:
         return text.lower().split()
 
     def build(self):
-        results = collection.get(limit=200_000, include=["documents", "metadatas"])
-        if not results["ids"]:
+        client = get_client()
+        self.ids = []
+        self.texts = []
+        self.metas = []
+        for coll in [COLLECTION_PDF, COLLECTION_LEGAL]:
+            try:
+                records, _ = client.scroll(collection_name=coll, limit=100000, with_payload=True, with_vectors=False)
+                for r in records:
+                    self.ids.append(str(r.id))
+                    self.texts.append(r.payload.get("text", ""))
+                    self.metas.append({k:v for k,v in r.payload.items() if k != "text"})
+            except Exception:
+                pass
+        
+        if not self.ids:
             self.bm25 = None
-            self.ids, self.texts, self.metas = [], [], []
-            print("[BM25] No documents in DB yet. Index cleared.")
             return
-
-        self.ids = results["ids"]
-        self.texts = results["documents"]
-        self.metas = results["metadatas"]
+            
         self.bm25 = BM25Okapi([self._tok(text) for text in self.texts])
-        print(f"[BM25] Rebuilt: {len(self.ids)} chunks from {len(self.departments())} departments")
+        print(f"[BM25] Rebuilt: {len(self.ids)} chunks")
 
     def search(self, query: str, n: int, department: str = None) -> list[tuple]:
         if not self.bm25 or not self.ids:
@@ -99,47 +116,7 @@ def get_departments() -> list[str]:
 
 
 def sync_document_metadata(document_id: int, department: str, category: str):
-    """Updates metadata for all chunks in ChromaDB belonging to a specific document."""
-    
-    # 1. Get all chunks for this document
-    # Note: document_id is stored in metadata
-    results = collection.get(where={"document_id": document_id}, include=["metadatas"])
-    if not results["ids"]:
-        print(f"[RAG] No chunks found in Chroma for document_id {document_id}. Sync skipped.")
-        return
-
-    # 2. Determine domain (consistent with ingest.py logic)
-    # Since we don't have the full path here easily, we use filename from metadata
-    test_meta = results["metadatas"][0]
-    filename = test_meta.get("filename", "")
-    
-    domain = "internal"
-    fn_lower = filename.lower()
-    if any(k in fn_lower for k in ["lao-dong", "lao_dong", "labour"]):
-        domain = "lao_dong"
-    elif any(k in fn_lower for k in ["giao-thong", "giao_thong", "traffic"]):
-        domain = "giao_thong"
-    elif any(k in fn_lower for k in ["doanh-nghiep", "enterprise"]):
-        domain = "doanh_nghiep"
-    elif any(k in department.lower() for k in ["phap-ly", "legal"]):
-        domain = "legal"
-
-    # 3. Batch update metadata
-    new_metas = []
-    for m in results["metadatas"]:
-        m["department"] = department
-        m["category"] = category
-        m["domain"] = domain
-        new_metas.append(m)
-
-    collection.update(
-        ids=results["ids"],
-        metadatas=new_metas
-    )
-    print(f"[RAG] Synced {len(new_metas)} chunks for doc {document_id} -> {department}/{category}/{domain}")
-    
-    # 4. Rebuild BM25 index since it relies on department filtering
-    rebuild_index()
+    pass # To be implemented for Qdrant
 
 
 def get_embedding(text: str) -> list[float]:
@@ -202,14 +179,39 @@ def detect_domain(question: str) -> str | None:
         return "giao_thong"
     if any(k in q for k in ["doanh nghiệp", "vốn", "cổ đông", "điều lệ", "enterprise"]):
         return "doanh_nghiep"
+    if any(k in q for k in [
+        "luật", "nghị định", "thông tư", "quyết định", "pháp luật",
+        "quy định", "điều khoản", "bộ luật", "hiến pháp", "pháp lệnh",
+        "sắc lệnh", "chỉ thị", "công văn", "nghị quyết",
+        "legal", "law", "decree", "regulation",
+        "văn bản pháp luật", "điều luật", "khoản", "chương",
+    ]):
+        return "legal"
     
     # Optional: LLM based classifier if keywords miss
     return None
 
 
 def vector_search(query_text: str, n: int, department: str = None, domain: str = None) -> tuple[list[str], list[str], list[float]]:
-    total = collection.count()
-    if total == 0:
+    client = get_client()
+    target_collection = COLLECTION_LEGAL if domain == "legal" else COLLECTION_PDF
+    
+    must_conditions = []
+    if department and department != "all":
+        must_conditions.append(FieldCondition(key="department", match=MatchValue(value=department)))
+    if domain:
+        must_conditions.append(FieldCondition(key="domain", match=MatchValue(value=domain)))
+        
+    payload_filter = Filter(must=must_conditions) if must_conditions else None
+    
+    try:
+        results = search(client, target_collection, get_embedding(query_text), top_k=n, payload_filter=payload_filter)
+        ids = [str(r.id) for r in results]
+        docs = [r.payload.get("text", "") for r in results]
+        sims = [r.score for r in results]
+        return ids, docs, sims
+    except Exception as exc:
+        print(f"[RAG] Vector search error: {exc}")
         return [], [], []
 
     # Build the 'where' filter
@@ -260,7 +262,7 @@ def query(question: str, session_id: str = None, department: str = None) -> dict
     print(f"[RAG] Detected language: {detected_lang} | Q: {question!r}")
     
     history = get_recent_messages(session_id) if session_id else []
-    total = collection.count()
+    total = count_points(get_client(), COLLECTION_PDF) + count_points(get_client(), COLLECTION_LEGAL)
     print(f"[RAG] Total chunks in DB: {total} | BM25 index size: {len(_idx.ids)}")
 
     if total == 0:
@@ -288,7 +290,7 @@ def query(question: str, session_id: str = None, department: str = None) -> dict
         print(f"[RAG] Max Vector similarity: {max(vec_sims):.4f} | Min: {min(vec_sims):.4f}")
 
     # Step 1: Filter vector hits by threshold
-    gated_vec_ids = [vid for vid, sim in zip(vec_ids, vec_sims) if sim >= 0.35]
+    gated_vec_ids = [vid for vid, sim in zip(vec_ids, vec_sims) if sim >= SIMILARITY_THRESHOLD]
 
     # Step 2: Filter BM25 hits by their own threshold (don't force them through vector gate)
     # hit[2] is the BM25 score
@@ -327,7 +329,7 @@ def query(question: str, session_id: str = None, department: str = None) -> dict
     resp = client.chat.completions.create(
         model=LLM_MODEL,
         messages=build_prompt(context=context, question=question, history=history),
-        temperature=0.3, 
+        temperature=LLM_TEMPERATURE, 
         max_tokens=1000,
     )
 

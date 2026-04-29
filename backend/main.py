@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import httpx
-from db import collection
+from vector_store import get_client, count_points, delete_points_by_file, clear_collection, COLLECTION_PDF, COLLECTION_LEGAL
 from admin_auth import create_admin_token, verify_admin_token
 from emailer import get_notify_emails, send_email
 from database import (
@@ -150,7 +150,7 @@ class DocumentUpdateRequest(BaseModel):
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "chunks": collection.count()}
+    return {"status": "ok", "chunks": (count_points(get_client(), COLLECTION_PDF) + count_points(get_client(), COLLECTION_LEGAL))}
 
 
 @app.on_event("startup")
@@ -339,7 +339,7 @@ def _stats_payload() -> dict:
             if f.lower().endswith(valid_exts):
                 doc_files.append(os.path.relpath(os.path.join(root, f), DOCS_DIR))
     return {
-        "total_chunks": collection.count(),
+        "total_chunks": (count_points(get_client(), COLLECTION_PDF) + count_points(get_client(), COLLECTION_LEGAL)),
         "total_files":  len(doc_files),
         "files":        sorted(doc_files),
         "departments":  get_departments(),
@@ -541,7 +541,7 @@ async def _handle_upload(request: Request, file: UploadFile, department: str, ca
 
     # Remove old chunks for this logical path before re-indexing latest
     try:
-        collection.delete(where={"file_id": _file_id_for_path(dest)})
+        delete_points_by_file(get_client(), COLLECTION_PDF, _file_id_for_path(dest)); delete_points_by_file(get_client(), COLLECTION_LEGAL, _file_id_for_path(dest))
     except Exception as e:
         print(f"[Upload] Warning: could not delete old chunks for {dest}: {e}")
 
@@ -563,16 +563,16 @@ async def _handle_upload(request: Request, file: UploadFile, department: str, ca
                 print(f"[Upload] Warning: could not remove old version file {fp}: {e}")
         if fp:
             try:
-                collection.delete(where={"file_id": _file_id_for_path(fp)})
+                delete_points_by_file(get_client(), COLLECTION_PDF, _file_id_for_path(fp)); delete_points_by_file(get_client(), COLLECTION_LEGAL, _file_id_for_path(fp))
             except Exception:
                 pass
 
-    print(f"[Upload] {file.filename} → {chunks} chunks | DB total: {collection.count()}")
+    print(f"[Upload] {file.filename} → {chunks} chunks | DB total: {(count_points(get_client(), COLLECTION_PDF) + count_points(get_client(), COLLECTION_LEGAL))}")
     return {
         "file":       file.filename,
         "department": department,
         "chunks":     chunks,
-        "db_total":   collection.count(),
+        "db_total":   (count_points(get_client(), COLLECTION_PDF) + count_points(get_client(), COLLECTION_LEGAL)),
         "message":    f"Đã index v{doc['version']} ({chunks} chunks) từ {file.filename} [{department}]"
     }
 
@@ -657,7 +657,7 @@ async def admin_crawl(req: CrawlRequest, request: Request):
     )
 
     try:
-        collection.delete(where={"file_id": _file_id_for_path(dest)})
+        delete_points_by_file(get_client(), COLLECTION_PDF, _file_id_for_path(dest)); delete_points_by_file(get_client(), COLLECTION_LEGAL, _file_id_for_path(dest))
     except Exception:
         pass
 
@@ -678,7 +678,7 @@ async def admin_crawl(req: CrawlRequest, request: Request):
                 pass
         if fp:
             try:
-                collection.delete(where={"file_id": _file_id_for_path(fp)})
+                delete_points_by_file(get_client(), COLLECTION_PDF, _file_id_for_path(fp)); delete_points_by_file(get_client(), COLLECTION_LEGAL, _file_id_for_path(fp))
             except Exception:
                 pass
 
@@ -727,9 +727,9 @@ def admin_reset_db():
 
 def _handle_reset():
     try:
-        all_data = collection.get(include=[])
-        if all_data["ids"]:
-            collection.delete(ids=all_data["ids"])
+        client = get_client()
+        clear_collection(client, COLLECTION_PDF)
+        clear_collection(client, COLLECTION_LEGAL)
         rebuild_index()
         return {"status": "ok", "message": "Đã xóa sạch database"}
     except Exception as e:
