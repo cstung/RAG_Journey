@@ -1,11 +1,13 @@
-# backend/datasets/hf_legal.py
+# backend/data_adapters/hf_legal.py
 """
 Connector for th1nhng0/vietnamese-legal-documents
 
-Schema:
-  metadata config: id, document_number, title, url, legal_type,
-                   legal_sectors, issuing_authority, issuance_date, signers
-  content  config: id, content (full markdown)
+Uses the 'legacy' config which has English field names and plain-text content:
+  legacy/metadata split: id, document_number, title, legal_type, legal_sectors,
+                         issuing_authority, issuance_date (YYYY-MM-DD), signers, ...
+  legacy/content split:  id, content (plain text)
+
+518k documents total — much broader coverage than the 'metadata' config.
 """
 import re
 import hashlib
@@ -52,17 +54,17 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
     # ── Internal helpers ────────────────────────────────────────────────────────
 
     def _load_filtered_metadata(self) -> pd.DataFrame:
-        print("[hf_legal] Loading metadata (~82 MB)...")
-        ds   = load_dataset("th1nhng0/vietnamese-legal-documents", "metadata")
-        meta = ds["data"].to_pandas()
+        print("[hf_legal] Loading legacy metadata (~518k docs)...")
+        ds   = load_dataset("th1nhng0/vietnamese-legal-documents", "legacy", split="metadata")
+        meta = ds.to_pandas()
 
-        # Sector filter
-        sector_pattern = "|".join(self.sectors)
-        mask = meta["legal_sectors"].str.contains(sector_pattern, na=False, regex=True)
+        # Sector filter — legal_sectors is a string field in the legacy config
+        sector_pattern = "|".join(re.escape(s) for s in self.sectors)
+        mask = meta["legal_sectors"].fillna("").str.contains(sector_pattern, regex=True)
 
-        # Year filter
+        # Year filter — dates are YYYY-MM-DD in legacy config
         meta["_year"] = pd.to_datetime(
-            meta["issuance_date"], dayfirst=True, errors="coerce"
+            meta["issuance_date"], errors="coerce"
         ).dt.year
         mask &= meta["_year"] >= self.min_year
 
@@ -77,58 +79,50 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
         print(f"[hf_legal] Filtered: {len(filtered):,} documents")
         return filtered
 
-    def _chunk_markdown(self, doc_id: str, markdown: str, metadata: dict) -> list[DatasetRecord]:
+    def _chunk_text(self, doc_id: str, text: str, metadata: dict) -> list[DatasetRecord]:
         """
-        Article-aware chunking strategy for Vietnamese legal Markdown:
-          1. Split on Điều / Chương / Mục headings (## markers)
-          2. If a section is too long → sliding window
-          3. If a section is too short → merge with next
+        Simple sliding-window chunker for plain-text Vietnamese legal documents.
+        Tries to split on paragraph breaks first, then falls back to fixed window.
         """
         max_chars = int(MAX_CHUNK_TOKENS * CHARS_PER_TOKEN)
         min_chars = int(MIN_CHUNK_TOKENS * CHARS_PER_TOKEN)
         ovl_chars = int(OVERLAP_TOKENS   * CHARS_PER_TOKEN)
 
-        # Split on markdown headings (##, ###, ####)
-        sections = re.split(r'(?=^#{1,4} )', markdown, flags=re.MULTILINE)
-        sections = [s.strip() for s in sections if s.strip()]
+        # Split on double newlines (paragraph boundaries)
+        paragraphs = [p.strip() for p in re.split(r'\n{2,}', text) if p.strip()]
 
         records: list[DatasetRecord] = []
         buffer  = ""
         chunk_idx = 0
 
-        def flush(text: str):
+        def flush(text_block: str):
             nonlocal chunk_idx
-            if not text.strip():
+            if not text_block.strip():
                 return
             chunk_id = hashlib.md5(f"{doc_id}-{chunk_idx}".encode()).hexdigest()
             records.append(DatasetRecord(
                 id=chunk_id,
-                text=text.strip(),
+                text=text_block.strip(),
                 metadata={**metadata, "chunk_index": chunk_idx, "doc_id": doc_id},
             ))
             chunk_idx += 1
 
-        for section in sections:
-            if len(section) > max_chars:
-                # Flush buffer first
+        for para in paragraphs:
+            if len(para) > max_chars:
                 flush(buffer); buffer = ""
-                # Sliding window on oversized section
+                # Sliding window on oversized paragraph
                 start = 0
-                while start < len(section):
-                    flush(section[start: start + max_chars])
+                while start < len(para):
+                    flush(para[start: start + max_chars])
                     start += max_chars - ovl_chars
-            elif len(buffer) + len(section) > max_chars:
+            elif len(buffer) + len(para) > max_chars:
                 flush(buffer)
-                buffer = section
+                buffer = para
             else:
-                buffer += "\n\n" + section if buffer else section
+                buffer += "\n\n" + para if buffer else para
 
-            # Merge short buffers
-            if len(buffer) < min_chars:
-                continue  # keep accumulating
-            else:
-                if len(buffer) >= min_chars:
-                    flush(buffer); buffer = ""
+            if len(buffer) >= min_chars:
+                flush(buffer); buffer = ""
 
         flush(buffer)
         return records
@@ -144,29 +138,29 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
         meta = self._load_filtered_metadata()
         self._filtered_ids = meta["id"].tolist()
 
-        print("[hf_legal] Loading content (~3.6 GB) — this may take a while...")
-        content_ds = load_dataset("th1nhng0/vietnamese-legal-documents", "content")
-        content_df = content_ds["data"].to_pandas()
+        print("[hf_legal] Loading legacy content (~518k docs plain text)...")
+        content_ds = load_dataset("th1nhng0/vietnamese-legal-documents", "legacy", split="content")
+        content_df = content_ds.to_pandas()
 
-        # Join
+        # Join on id
         df = meta.merge(content_df, on="id", how="inner")
         print(f"[hf_legal] Joined {len(df):,} docs — starting chunking...")
 
         for _, row in df.iterrows():
             metadata = {
-                "document_number":   row.get("document_number", ""),
-                "title":             row.get("title", ""),
-                "url":               row.get("url", ""),
-                "legal_type":        row.get("legal_type", ""),
-                "legal_sectors":     row.get("legal_sectors", ""),
-                "issuing_authority": row.get("issuing_authority", ""),
-                "issuance_date":     row.get("issuance_date", ""),
+                "document_number":   str(row.get("document_number") or ""),
+                "title":             str(row.get("title") or ""),
+                "legal_type":        str(row.get("legal_type") or ""),
+                "legal_sectors":     str(row.get("legal_sectors") or ""),
+                "issuing_authority": str(row.get("issuing_authority") or ""),
+                "issuance_date":     str(row.get("issuance_date") or ""),
+                "signers":           str(row.get("signers") or ""),
                 "dataset":           "th1nhng0/vietnamese-legal-documents",
                 "type":              "legal",
             }
-            chunks = self._chunk_markdown(
+            chunks = self._chunk_text(
                 doc_id=str(row["id"]),
-                markdown=row.get("content", ""),
+                text=str(row.get("content") or ""),
                 metadata=metadata,
             )
             yield from chunks
