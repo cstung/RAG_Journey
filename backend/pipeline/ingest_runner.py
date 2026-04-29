@@ -67,6 +67,16 @@ class IngestRunner:
         client = get_client()
         ensure_collection(client, self.collection, EMBEDDING_DIM)
 
+        # Set total before starting so UI shows X/N from the first poll
+        try:
+            total = self.connector.total_records()
+            self._state["total"] = total
+            self._save_state()
+            if progress_callback:
+                progress_callback(self._state.copy())
+        except Exception:
+            pass  # non-fatal; total stays 0 but ingestion continues
+
         processed_ids = set(self._state.get("processed_ids", []))
         self._state["status"] = "running"
         self._save_state()

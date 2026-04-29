@@ -45,7 +45,7 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
         self.min_year    = min_year
         self.legal_types = legal_types
         self.max_docs    = max_docs
-        self._filtered_ids: list[int] | None = None
+        self._filtered_df: pd.DataFrame | None = None   # cached after first load
 
     @property
     def collection_name(self) -> str:
@@ -54,6 +54,10 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
     # ── Internal helpers ────────────────────────────────────────────────────────
 
     def _load_filtered_metadata(self) -> pd.DataFrame:
+        """Load and cache the filtered metadata. Avoids double-download."""
+        if self._filtered_df is not None:
+            return self._filtered_df
+
         print("[hf_legal] Loading legacy metadata (~518k docs)...")
         ds   = load_dataset("th1nhng0/vietnamese-legal-documents", "legacy", split="metadata")
         meta = ds.to_pandas()
@@ -77,6 +81,7 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
             filtered = filtered.head(self.max_docs)
 
         print(f"[hf_legal] Filtered: {len(filtered):,} documents")
+        self._filtered_df = filtered
         return filtered
 
     def _chunk_text(self, doc_id: str, text: str, metadata: dict) -> list[DatasetRecord]:
@@ -131,12 +136,10 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
 
     def total_records(self) -> int:
         meta = self._load_filtered_metadata()
-        self._filtered_ids = meta["id"].tolist()
-        return len(self._filtered_ids)
+        return len(meta)
 
     def iter_records(self) -> Iterator[DatasetRecord]:
-        meta = self._load_filtered_metadata()
-        self._filtered_ids = meta["id"].tolist()
+        meta = self._load_filtered_metadata()  # uses cache after total_records() call
 
         print("[hf_legal] Loading legacy content (~518k docs plain text)...")
         content_ds = load_dataset("th1nhng0/vietnamese-legal-documents", "legacy", split="content")
