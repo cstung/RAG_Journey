@@ -64,18 +64,32 @@ class IngestRunner:
         Synchronous run — call from a background thread or subprocess.
         progress_callback(state_dict) is called after each batch.
         """
+        def emit(status_override: str | None = None):
+            state = self._state.copy()
+            if status_override:
+                state["status"] = status_override
+            if progress_callback:
+                progress_callback(state)
+
         client = get_client()
         ensure_collection(client, self.collection, EMBEDDING_DIM)
 
-        # Set total before starting so UI shows X/N from the first poll
+        # Phase 1: load + filter metadata to get the total count
+        self._state["status"] = "loading_metadata"
+        self._save_state()
+        emit()
         try:
             total = self.connector.total_records()
             self._state["total"] = total
             self._save_state()
-            if progress_callback:
-                progress_callback(self._state.copy())
+            emit()
         except Exception:
-            pass  # non-fatal; total stays 0 but ingestion continues
+            pass  # non-fatal
+
+        # Phase 2: download full content split (can be many GB)
+        self._state["status"] = "loading_content"
+        self._save_state()
+        emit()
 
         processed_ids = set(self._state.get("processed_ids", []))
         self._state["status"] = "running"

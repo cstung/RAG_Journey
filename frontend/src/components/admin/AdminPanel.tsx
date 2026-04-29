@@ -1137,25 +1137,57 @@ function DatasetsTab({
                   <tr key={jobId} className="hover:bg-secondary/60">
                     <TD className="font-mono text-[11px]">{jobId}</TD>
                     <TD>
-                      <span className={cn(
-                        "inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase",
-                        state.status === "completed" ? "bg-[hsl(var(--success))]/15 text-[hsl(var(--success))]" :
-                        state.status?.startsWith("error") ? "bg-destructive/10 text-destructive" :
-                        "bg-ocean/10 text-ocean-deep"
-                      )}>
-                        {state.status || "unknown"}
-                      </span>
+                      {(() => {
+                        let label = state.status || "unknown";
+                        let colorClass = "bg-ocean/10 text-ocean-deep";
+                        
+                        if (state.status === "completed") {
+                          label = "Completed";
+                          colorClass = "bg-[hsl(var(--success))]/15 text-[hsl(var(--success))]";
+                        } else if (state.status?.startsWith("error")) {
+                          label = "Error";
+                          colorClass = "bg-destructive/10 text-destructive";
+                        } else if (state.status === "loading_metadata") {
+                          label = "Metadata";
+                          colorClass = "bg-sun/20 text-amber-600 dark:text-amber-400";
+                        } else if (state.status === "loading_content") {
+                          label = "Downloading";
+                          colorClass = "bg-coral/20 text-coral";
+                        } else if (state.status === "running") {
+                          label = "Embedding";
+                          colorClass = "bg-ocean/20 text-ocean-deep";
+                        } else if (state.status === "queued") {
+                          label = "Queued";
+                          colorClass = "bg-secondary text-secondary-foreground";
+                        }
+
+                        return (
+                          <span className={cn("inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase whitespace-nowrap", colorClass)}>
+                            {label}
+                          </span>
+                        );
+                      })()}
                     </TD>
                     <TD>
                       <div className="flex items-center gap-2">
-                        <span className="text-xs font-semibold w-16 text-right">{embedded} / {total}</span>
-                        <div className="h-2 flex-1 rounded-full bg-border overflow-hidden">
-                          <div 
-                            className="h-full bg-emerald-500 transition-all duration-300"
-                            style={{ width: `${pct}%` }}
-                          />
+                        <span className="text-xs font-semibold w-16 text-right">
+                          {state.status === "loading_metadata" ? "--" : `${embedded} / ${total}`}
+                        </span>
+                        <div className="h-2 flex-1 rounded-full bg-border overflow-hidden relative">
+                          {state.status === "loading_content" ? (
+                            <div className="absolute inset-0 bg-coral/50 animate-pulse" />
+                          ) : state.status === "loading_metadata" ? (
+                            <div className="absolute inset-0 bg-amber-500/50 animate-pulse" />
+                          ) : (
+                            <div 
+                              className="h-full bg-emerald-500 transition-all duration-300"
+                              style={{ width: `${pct}%` }}
+                            />
+                          )}
                         </div>
-                        <span className="text-xs font-bold w-8">{pct}%</span>
+                        <span className="text-xs font-bold w-8">
+                          {state.status === "loading_metadata" || state.status === "loading_content" ? "--" : `${pct}%`}
+                        </span>
                       </div>
                     </TD>
                   </tr>

@@ -176,6 +176,8 @@ async def trigger_ingest(req: IngestRequest, background_tasks: BackgroundTasks):
     _ingest_state[job_id] = {"status": "queued", "embedded": 0, "total": 0}
 
     def run_job():
+        # Signal immediately so UI shows activity before the HF download starts
+        _ingest_state[job_id]["status"] = "loading_metadata"
         try:
             connector = get_connector(
                 req.dataset_id,
@@ -185,7 +187,6 @@ async def trigger_ingest(req: IngestRequest, background_tasks: BackgroundTasks):
                 max_docs=req.max_docs,
             )
             runner = IngestRunner(connector)
-            _ingest_state[job_id] = {**runner.get_progress(), "status": "running"}
 
             def on_progress(state: dict):
                 _ingest_state[job_id] = state
