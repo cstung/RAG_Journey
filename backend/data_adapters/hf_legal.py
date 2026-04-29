@@ -161,32 +161,33 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
             print("[hf_legal] No documents matched the filters. Skipping scan.")
             return
 
-        # Use streaming=False to download the 3.6GB file locally ONCE to the persistent volume.
-        # This prevents PyArrow HTTP range request timeouts/OOMs and makes future runs instant.
-        content_ds = load_dataset("parquet", data_files="hf://datasets/th1nhng0/vietnamese-legal-documents/legacy/content.parquet", split="train", streaming=False)
+        # Use streaming=True and direct parquet URL to prevent massive RAM/Disk usage
+        content_ds = load_dataset("parquet", data_files="hf://datasets/th1nhng0/vietnamese-legal-documents/legacy/content.parquet", split="train", streaming=True)
 
-        # Extract IDs column directly (fast) and find matching indices
-        all_ids = content_ds["id"]
-        indices_to_keep = [i for i, doc_id in enumerate(all_ids) if str(doc_id) in valid_ids]
+        found = 0
+        total_to_find = len(valid_ids)
         
-        # Create a fast memory-mapped view of only the requested documents
-        filtered_ds = content_ds.select(indices_to_keep)
-
-        for row in filtered_ds:
+        for row in content_ds:
             doc_id = str(row["id"])
+            if doc_id not in valid_ids:
+                continue
+                
+            found += 1
+            if found % 10 == 0:
+                print(f"[hf_legal] Content scan: {found}/{total_to_find} docs found")
+                
             meta_row = meta_dict[doc_id]
-            
             metadata = {
-                "document_number":   str(meta_row.get("document_number") or ""),
-                "title":             str(meta_row.get("title") or ""),
-                "legal_type":        str(meta_row.get("legal_type") or ""),
-                "legal_sectors":     str(meta_row.get("legal_sectors") or ""),
-                "issuing_authority": str(meta_row.get("issuing_authority") or ""),
-                "issuance_date":     str(meta_row.get("issuance_date") or ""),
-                "signers":           str(meta_row.get("signers") or ""),
-                "dataset":           "th1nhng0/vietnamese-legal-documents",
-                "type":              "legal",
+                "document_number": str(meta_row.get("document_number", "")),
+                "title": str(meta_row.get("title", "")),
+                "url": str(meta_row.get("url", "")),
+                "legal_type": str(meta_row.get("legal_type", "")),
+                "legal_sectors": str(meta_row.get("legal_sectors", "")),
+                "issuing_authority": str(meta_row.get("issuing_authority", "")),
+                "issuance_date": str(meta_row.get("issuance_date", "")),
+                "signers": str(meta_row.get("signers", ""))
             }
+            
             chunks = self._chunk_text(
                 doc_id=doc_id,
                 text=str(row.get("content") or ""),
@@ -194,8 +195,8 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
             )
             yield from chunks
             
-            # Optimization: Stop streaming once we've found all our filtered docs
-            if matched_count >= len(valid_ids):
+            valid_ids.discard(doc_id)
+            if not valid_ids:
                 print("[hf_legal] Found all requested documents. Stopping stream.")
                 break
 
