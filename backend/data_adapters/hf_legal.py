@@ -165,13 +165,15 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
         # This prevents PyArrow HTTP range request timeouts/OOMs and makes future runs instant.
         content_ds = load_dataset("parquet", data_files="hf://datasets/th1nhng0/vietnamese-legal-documents/legacy/content.parquet", split="train", streaming=False)
 
-        matched_count = 0
-        for row in content_ds:
+        # Extract IDs column directly (fast) and find matching indices
+        all_ids = content_ds["id"]
+        indices_to_keep = [i for i, doc_id in enumerate(all_ids) if str(doc_id) in valid_ids]
+        
+        # Create a fast memory-mapped view of only the requested documents
+        filtered_ds = content_ds.select(indices_to_keep)
+
+        for row in filtered_ds:
             doc_id = str(row["id"])
-            if doc_id not in valid_ids:
-                continue
-                
-            matched_count += 1
             meta_row = meta_dict[doc_id]
             
             metadata = {
