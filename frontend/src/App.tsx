@@ -1,27 +1,19 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Route, Routes } from "react-router-dom";
-import { Toaster as Sonner } from "@/components/ui/sonner";
-import { Toaster } from "@/components/ui/toaster";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import Index from "./pages/Index.tsx";
-import NotFound from "./pages/NotFound.tsx";
+import { useState } from "react"
 
-const queryClient = new QueryClient();
+export default function App() {
+  const [message, setMessage] = useState("")
+  const [output, setOutput] = useState("")
 
-const App = () => (
-  <QueryClientProvider client={queryClient}>
-    <TooltipProvider>
-      <Toaster />
-      <Sonner />
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Index />} />
-          {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-          <Route path="*" element={<NotFound />} />
-        </Routes>
-      </BrowserRouter>
-    </TooltipProvider>
-  </QueryClientProvider>
-);
+  const ask = async () => {
+    const res = await fetch("/chat/stream", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({message, language:"vi"})})
+    const text = await res.text()
+    setOutput(text)
+  }
 
-export default App;
+  return <main style={{padding:20}}>
+    <h1>LWHN Rebuild</h1>
+    <textarea value={message} onChange={(e)=>setMessage(e.target.value)} />
+    <button onClick={ask}>Send</button>
+    <pre>{output}</pre>
+  </main>
+}
