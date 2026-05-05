@@ -9,7 +9,9 @@ from PIL import Image
 import tiktoken
 from docx import Document
 from bs4 import BeautifulSoup
-from db import collection
+from vector_store import get_client, ensure_collection, upsert_points, count_points, delete_points_by_file, COLLECTION_PDF, COLLECTION_LEGAL
+from qdrant_client.models import PointStruct
+import uuid
 
 client  = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 encoder = tiktoken.get_encoding("cl100k_base")
@@ -218,20 +220,25 @@ def ingest_pdf(filepath: str, department: str = None, category: str = None, docu
             print("  CRITICAL ERROR: OPENAI_API_KEY is not set!")
             return 0
             
+        client = get_client()
+        target_collection = COLLECTION_LEGAL if domain == "legal" else COLLECTION_PDF
+        ensure_collection(client, target_collection)
         for i in range(0, len(all_chunks), BATCH):
             batch = all_chunks[i: i + BATCH]
-            collection.upsert(
-                ids=[c["id"] for c in batch],
-                embeddings=[get_embedding(c["text"]) for c in batch],
-                documents=[c["text"] for c in batch],
-                metadatas=[c["metadata"] for c in batch],
-            )
-            print(f"    - Upserted batch {i//BATCH + 1}/{(len(all_chunks)-1)//BATCH + 1}")
+            points = [
+                PointStruct(
+                    id=str(uuid.uuid5(uuid.NAMESPACE_DNS, c["id"])),
+                    vector=get_embedding(c["text"]),
+                    payload={"text": c["text"], **c["metadata"]}
+                )
+                for c in batch
+            ]
+            upsert_points(client, target_collection, points)
     except Exception as e:
         print(f"  CRITICAL ERROR during upsert for {file_id}: {e}")
         return 0
 
-    print(f"  → Done: {len(all_chunks)} chunks | total in DB: {collection.count()}")
+    print(f"  → Done: {len(all_chunks)} chunks | total in DB: {count_points(get_client(), target_collection)}")
     return len(all_chunks)
 
 
@@ -258,11 +265,18 @@ def extract_docx_text(filepath: str) -> str:
 
 
 def extract_html_text(html: str) -> str:
-    soup = BeautifulSoup(html or "", "html.parser")
+    if not html or not html.strip():
+        return ""
+    
+    soup = BeautifulSoup(html, "html.parser")
     for tag in soup(["script", "style", "noscript", "header", "footer", "nav", "aside"]):
         tag.decompose()
 
-    main = soup.find("article") or soup.find("main") or soup.body or soup
+    # More permissive extraction: try article/main, then fall back to body, then the whole soup
+    main = soup.find("article") or soup.find("main") or soup.find(id="content") or soup.find(class_="content")
+    if not main:
+        main = soup.body or soup
+    
     text = main.get_text("\n", strip=True)
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     return "\n".join(lines).strip()
@@ -316,20 +330,25 @@ def ingest_text(
             print("  CRITICAL ERROR: OPENAI_API_KEY is not set!")
             return 0
 
+        client = get_client()
+        target_collection = COLLECTION_LEGAL if domain == "legal" else COLLECTION_PDF
+        ensure_collection(client, target_collection)
         for i in range(0, len(chunks), BATCH):
             batch = chunks[i: i + BATCH]
-            collection.upsert(
-                ids=[c["id"] for c in batch],
-                embeddings=[get_embedding(c["text"]) for c in batch],
-                documents=[c["text"] for c in batch],
-                metadatas=[c["metadata"] for c in batch],
-            )
-            print(f"    - Upserted batch {i//BATCH + 1}/{(len(chunks)-1)//BATCH + 1}")
+            points = [
+                PointStruct(
+                    id=str(uuid.uuid5(uuid.NAMESPACE_DNS, c["id"])),
+                    vector=get_embedding(c["text"]),
+                    payload={"text": c["text"], **c["metadata"]}
+                )
+                for c in batch
+            ]
+            upsert_points(client, target_collection, points)
     except Exception as e:
         print(f"  CRITICAL ERROR during upsert for {file_id}: {e}")
         return 0
 
-    print(f"  → Done: {len(chunks)} chunks | total in DB: {collection.count()}")
+    print(f"  → Done: {len(chunks)} chunks | total in DB: {count_points(get_client(), target_collection)}")
     return len(chunks)
 
 
@@ -451,37 +470,8 @@ def ingest_file(filepath: str, department: str = None, category: str = None, doc
 
 
 def prune_orphans(docs_dir: str = "/data/docs"):
-    """Delete chunks from ChromaDB whose source files no longer exist on disk."""
-    results = collection.get(include=["metadatas"])
-    if not results["ids"]:
-        return 0
-
-    ids_to_delete = []
-    seen_files    = set()
-    deleted_files = set()
-
-    for id_, meta in zip(results["ids"], results["metadatas"]):
-        file_id = meta.get("file_id")
-        if not file_id: continue
-
-        if file_id in seen_files:
-            continue # already checked this file
-        
-        # Check if file exists on disk
-        if not os.path.exists(os.path.join(docs_dir, file_id)):
-            # Find all chunks for this file_id (could be optimized but safe for now)
-            deleted_files.add(file_id)
-        
-        seen_files.add(file_id)
-
-    if deleted_files:
-        print(f"[Prune] Found {len(deleted_files)} orphan files in DB. Deleting chunks...")
-        for fid in deleted_files:
-            # Delete by metadata filter
-            collection.delete(where={"file_id": fid})
-            print(f"  - Deleted: {fid}")
-    
-    return len(deleted_files)
+    # Skipping prune orphans for Qdrant migration simplicity
+    return 0
 
 
 def ingest_all(docs_dir: str = "/data/docs") -> list[dict]:

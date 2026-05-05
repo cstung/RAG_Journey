@@ -3,13 +3,31 @@ import os, shutil
 import re
 import time
 from urllib.parse import urlparse
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends, Header, Request
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends, Header, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel
 import httpx
-from db import collection
+import asyncio
+from fastapi import BackgroundTasks
+import json
+import traceback
+from pathlib import Path
+
+from data_adapters import get_connector, REGISTRY
+from pipeline import IngestRunner
+
+_ingest_state: dict = {}                        # in-memory progress cache
+
+class IngestRequest(BaseModel):
+    dataset_id: str                              # e.g. "th1nhng0/vietnamese-legal-documents"
+    sectors:    list[str] | None = None
+    min_year:   int              = 2000
+    legal_types: list[str] | None = None
+    max_docs:   int | None = None                # set to 100 for smoke test
+
+from vector_store import get_client, count_points, delete_points_by_file, clear_collection, COLLECTION_PDF, COLLECTION_LEGAL
 from admin_auth import create_admin_token, verify_admin_token
 from emailer import get_notify_emails, send_email
 from database import (
@@ -38,7 +56,7 @@ from database import (
     session_exists,
     verify_admin_credentials,
 )
-from rag import query as rag_query, rebuild_index, get_departments
+from rag import answer, query as rag_query, rebuild_index, get_departments
 from ingest import ingest_all, ingest_file, extract_html_text
 from middleware.rate_limit import ip_limiter, session_limiter
 from utils.input_guard import sanitise_question
@@ -108,9 +126,11 @@ def _file_id_for_path(filepath: str) -> str:
 
 
 class ChatRequest(BaseModel):
-    question:   str
-    session_id: str | None = None
-    department: str = "all"
+    question:    str
+    collections: list[str] | None = None   # NEW: optional override
+    filters:     dict | None = None         # NEW: e.g. {"legal_type": "Nghị định"}
+    session_id:  str | None = None
+    department:  str = "all"
 
 
 class SessionStartRequest(BaseModel):
@@ -148,9 +168,67 @@ class DocumentUpdateRequest(BaseModel):
     category: str
 
 
+@app.post("/api/admin/datasets/ingest")
+async def trigger_ingest(req: IngestRequest, background_tasks: BackgroundTasks):
+    """Start ingestion in background. Returns immediately with job_id."""
+    job_id = f"{req.dataset_id.replace('/', '_')}_{int(time.time())}"
+
+    # Set initial state NOW so status polls don't 404 before the thread starts
+    _ingest_state[job_id] = {"status": "queued", "embedded": 0, "total": 0}
+
+    def run_job():
+        # Signal immediately so UI shows activity before the HF download starts
+        _ingest_state[job_id]["status"] = "loading_metadata"
+        try:
+            connector = get_connector(
+                req.dataset_id,
+                sectors=req.sectors,
+                min_year=req.min_year,
+                legal_types=req.legal_types,
+                max_docs=req.max_docs,
+            )
+            runner = IngestRunner(connector, job_id=job_id)
+
+            def on_progress(state: dict):
+                _ingest_state[job_id] = state
+
+            runner.run(progress_callback=on_progress)
+            _ingest_state[job_id] = {**_ingest_state.get(job_id, {}), "status": "completed"}
+        except Exception as e:
+            progress = runner.get_progress() if "runner" in locals() else {}
+            _ingest_state[job_id] = {
+                "status": "error",
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "embedded": progress.get("embedded", 0),
+                "total": progress.get("total", 0),
+            }
+            print(f"[Ingest] Job {job_id} failed: {e}")
+            traceback.print_exc()
+
+    # FastAPI's BackgroundTasks runs sync callables in a threadpool — no executor wrapping needed
+    background_tasks.add_task(run_job)
+    return {"job_id": job_id, "status": "queued"}
+
+@app.get("/api/admin/datasets/status/{job_id}")
+async def ingest_status(job_id: str):
+    state = _ingest_state.get(job_id)
+    if state is None:
+        # Try reading from disk (survive restarts)
+        state_file = Path(f"data/ingest_state/{job_id}.json")
+        if state_file.exists():
+            state = json.loads(state_file.read_text())
+        else:
+            raise HTTPException(404, "Job not found")
+    return state
+
+@app.get("/api/admin/datasets")
+async def list_datasets():
+    return {"datasets": list(REGISTRY.keys())}
+
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "chunks": collection.count()}
+    return {"status": "ok", "chunks": (count_points(get_client(), COLLECTION_PDF) + count_points(get_client(), COLLECTION_LEGAL))}
 
 
 @app.on_event("startup")
@@ -278,27 +356,34 @@ def admin_get_document(document_id: int):
 
 @app.patch("/api/admin/documents/{document_id}")
 def admin_update_document(document_id: int, req: DocumentUpdateRequest):
-    from rag.core import sync_document_metadata
-    
     doc = get_document(document_id)
     if not doc:
         raise HTTPException(404, "Document not found")
-        
+
     dept = req.department.strip() or "General"
     cat = req.category.strip() or "general"
-    
+
     # 1. Update SQLite
     from database import update_document_metadata
     update_document_metadata(document_id, dept, cat)
-    
-    # 2. Sync to ChromaDB (Crucial for search filters)
+
+    # 2. Sync payload to Qdrant for both collections
     try:
-        sync_document_metadata(document_id, dept, cat)
+        from vector_store import get_client, COLLECTION_PDF, COLLECTION_LEGAL
+        from qdrant_client.models import Filter, FieldCondition, MatchValue, SetPayload
+        qdrant = get_client()
+        payload_patch = {"department": dept, "category": cat}
+        for collection in (COLLECTION_PDF, COLLECTION_LEGAL):
+            qdrant.set_payload(
+                collection_name=collection,
+                payload=payload_patch,
+                points=Filter(
+                    must=[FieldCondition(key="document_id", match=MatchValue(value=document_id))]
+                ),
+            )
     except Exception as e:
-        print(f"[Admin] Warning: ChromaDB sync failed for doc {document_id}: {e}")
-        # We don't fail the whole request because SQLite is updated, 
-        # but the user should know search might be stale.
-        return {"status": "partial_ok", "warning": f"SQLite updated but ChromaDB sync failed: {e}"}
+        print(f"[Admin] Warning: Qdrant payload sync failed for doc {document_id}: {e}")
+        return {"status": "partial_ok", "warning": f"SQLite updated but Qdrant sync failed: {e}"}
 
     return {"status": "ok", "message": f"Đã cập nhật metadata cho {doc['filename']}"}
 
@@ -339,7 +424,7 @@ def _stats_payload() -> dict:
             if f.lower().endswith(valid_exts):
                 doc_files.append(os.path.relpath(os.path.join(root, f), DOCS_DIR))
     return {
-        "total_chunks": collection.count(),
+        "total_chunks": (count_points(get_client(), COLLECTION_PDF) + count_points(get_client(), COLLECTION_LEGAL)),
         "total_files":  len(doc_files),
         "files":        sorted(doc_files),
         "departments":  get_departments(),
@@ -372,17 +457,32 @@ def chat(req: ChatRequest, request: Request):
     
     # 1. Save user message to history
     if req.session_id:
+        # Defensive fix: Ensure session exists to avoid FOREIGN KEY constraint failed
+        if not session_exists(req.session_id):
+            print(f"[Chat] Warning: Session {req.session_id} not found in DB. Creating it now.")
+            try:
+                create_session(user_name="AutoCreated", user_lang="vi")
+                # Wait: uuid is random, we can't 'guess' what the client has.
+                # If the client sent a specific ID, we must insert it as-is.
+                from database import get_db
+                conn = get_db()
+                conn.execute("INSERT OR IGNORE INTO sessions (id, user_name) VALUES (?, ?)", (req.session_id, "User"))
+                conn.commit()
+            except Exception as e:
+                print(f"[Chat] Error ensuring session exists: {e}")
+
         try:
             add_message(req.session_id, "user", cleaned_question.strip())
         except Exception as e:
             print(f"[Chat] Warning: could not save user message: {e}")
 
     # 2. Run RAG Pipeline
-    result = rag_query(
+    result = answer(
         question=cleaned_question.strip(),
-        session_id=req.session_id,
-        department=dept
+        collections=req.collections,
+        filters=req.filters,
     )
+    result["rewritten_query"] = result.get("rewritten_query", cleaned_question.strip())
 
     # 3. Save assistant message to history
     if req.session_id:
@@ -466,17 +566,6 @@ def feedback_summary_api(session_id: str | None = Query(default=None)):
     return feedback_summary(session_id=session_id)
 
 
-@app.post("/api/upload")
-async def upload(
-    request: Request,
-    file: UploadFile = File(...),
-    department: str = Query(default="General"),
-    category:   str = Query(default="general"),
-    admin: bool = Depends(verify_admin)
-):
-    uploaded_by = "admin"
-    return await _handle_upload(request=request, file=file, department=department, category=category, uploaded_by=uploaded_by)
-
 
 @app.post("/api/admin/upload")
 async def admin_upload(
@@ -541,7 +630,7 @@ async def _handle_upload(request: Request, file: UploadFile, department: str, ca
 
     # Remove old chunks for this logical path before re-indexing latest
     try:
-        collection.delete(where={"file_id": _file_id_for_path(dest)})
+        delete_points_by_file(get_client(), COLLECTION_PDF, _file_id_for_path(dest)); delete_points_by_file(get_client(), COLLECTION_LEGAL, _file_id_for_path(dest))
     except Exception as e:
         print(f"[Upload] Warning: could not delete old chunks for {dest}: {e}")
 
@@ -563,16 +652,16 @@ async def _handle_upload(request: Request, file: UploadFile, department: str, ca
                 print(f"[Upload] Warning: could not remove old version file {fp}: {e}")
         if fp:
             try:
-                collection.delete(where={"file_id": _file_id_for_path(fp)})
+                delete_points_by_file(get_client(), COLLECTION_PDF, _file_id_for_path(fp)); delete_points_by_file(get_client(), COLLECTION_LEGAL, _file_id_for_path(fp))
             except Exception:
                 pass
 
-    print(f"[Upload] {file.filename} → {chunks} chunks | DB total: {collection.count()}")
+    print(f"[Upload] {file.filename} → {chunks} chunks | DB total: {(count_points(get_client(), COLLECTION_PDF) + count_points(get_client(), COLLECTION_LEGAL))}")
     return {
         "file":       file.filename,
         "department": department,
         "chunks":     chunks,
-        "db_total":   collection.count(),
+        "db_total":   (count_points(get_client(), COLLECTION_PDF) + count_points(get_client(), COLLECTION_LEGAL)),
         "message":    f"Đã index v{doc['version']} ({chunks} chunks) từ {file.filename} [{department}]"
     }
 
@@ -657,7 +746,7 @@ async def admin_crawl(req: CrawlRequest, request: Request):
     )
 
     try:
-        collection.delete(where={"file_id": _file_id_for_path(dest)})
+        delete_points_by_file(get_client(), COLLECTION_PDF, _file_id_for_path(dest)); delete_points_by_file(get_client(), COLLECTION_LEGAL, _file_id_for_path(dest))
     except Exception:
         pass
 
@@ -678,7 +767,7 @@ async def admin_crawl(req: CrawlRequest, request: Request):
                 pass
         if fp:
             try:
-                collection.delete(where={"file_id": _file_id_for_path(fp)})
+                delete_points_by_file(get_client(), COLLECTION_PDF, _file_id_for_path(fp)); delete_points_by_file(get_client(), COLLECTION_LEGAL, _file_id_for_path(fp))
             except Exception:
                 pass
 
@@ -727,9 +816,9 @@ def admin_reset_db():
 
 def _handle_reset():
     try:
-        all_data = collection.get(include=[])
-        if all_data["ids"]:
-            collection.delete(ids=all_data["ids"])
+        client = get_client()
+        clear_collection(client, COLLECTION_PDF)
+        clear_collection(client, COLLECTION_LEGAL)
         rebuild_index()
         return {"status": "ok", "message": "Đã xóa sạch database"}
     except Exception as e:
@@ -746,12 +835,24 @@ def _first_existing_dir(paths: list[str]) -> str | None:
     return None
 
 
+@app.post("/api/admin/eval")
+async def run_eval(_=Depends(verify_admin)):
+    """Run RAGAS eval in background, return results path."""
+    import subprocess
+    proc = subprocess.Popen(
+        ["python", "eval/run_eval.py"],
+        cwd=os.path.dirname(__file__),
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
+    stdout, stderr = proc.communicate(timeout=300)
+    return {"stdout": stdout.decode(), "stderr": stderr.decode()}
+
+
 # Prefer serving the built React frontend when present.
-# - Local dev build:   <repo>/frontend/dist
-# - Optional copy-in:  <repo>/backend/frontend/dist
 _BACKEND_DIR = os.path.dirname(__file__)
 _FRONTEND_DIST = _first_existing_dir(
     [
+        "/frontend_dist",
         os.path.join(_BACKEND_DIR, "frontend", "dist"),
         os.path.abspath(os.path.join(_BACKEND_DIR, "..", "frontend", "dist")),
     ]

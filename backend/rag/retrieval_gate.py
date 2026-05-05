@@ -1,6 +1,11 @@
+import os
+
 # Tune these thresholds for your embedding model.
-SIMILARITY_THRESHOLD = 0.42  # Softened from 0.50 to reduce 'stubbornness'
-BM25_MIN_SCORE = 1.0         # Minimum BM25 score to be considered relevant
+SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.35"))
+BM25_MIN_SCORE = float(os.getenv("BM25_MIN_SCORE", "1.0"))
+RETRIEVE_N = int(os.getenv("RETRIEVE_N", "15"))
+TOP_K = int(os.getenv("TOP_K", "6"))
+LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.3"))
 
 NO_RESULTS_SENTINEL = "[KHÔNG TÌM THẤY TÀI LIỆU LIÊN QUAN]"
 

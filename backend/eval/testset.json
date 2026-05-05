@@ -1,0 +1,14 @@
+[
+  {
+    "question": "Mức lương tối thiểu vùng I áp dụng từ 01/07/2024 là bao nhiêu?",
+    "expected_answer": "4.960.000 đồng/tháng",
+    "expected_doc_number": "74/2024/NĐ-CP",
+    "collection": "vn_legal_docs"
+  },
+  {
+    "question": "Thời hạn nộp hồ sơ quyết toán thuế TNDN là bao nhiêu ngày?",
+    "expected_answer": "90 ngày",
+    "expected_doc_number": "78/2021/TT-BTC",
+    "collection": "vn_legal_docs"
+  }
+]

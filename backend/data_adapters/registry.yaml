@@ -1,0 +1,21 @@
+# backend/datasets/registry.yaml
+# Add any new HuggingFace dataset here — no code changes needed
+
+datasets:
+  - id: "th1nhng0/vietnamese-legal-documents"
+    connector: "VNLegalDocumentConnector"   # uses dedicated connector
+
+  - id: "some/future-tax-dataset"
+    connector: "HFGenericConnector"
+    config:
+      dataset_id:   "some/future-tax-dataset"
+      hf_config:    "default"
+      hf_split:     "train"
+      collection:   "vn_tax_docs"
+      text_field:   "content"
+      id_field:     "doc_id"
+      metadata_fields: ["title", "url", "category", "year"]
+      filters:
+        category: ["Thuế", "Tài chính"]
+      chunk_strategy: "paragraph"
+      max_chunk_tokens: 700

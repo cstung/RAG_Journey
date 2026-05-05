@@ -23,7 +23,7 @@ export function Welcome({ onSuggest }: WelcomeProps) {
       </div>
 
       <h2 className="font-display text-2xl font-extrabold tracking-tight text-ocean-deep sm:text-3xl">
-        A joyful aquatic world
+        Trợ lý pháp lý nội bộ
       </h2>
       <p className="mt-2 max-w-md text-sm text-muted-foreground sm:text-base">
         Hỏi tôi bất cứ điều gì về quy định, quy trình hoặc chính sách nội bộ.

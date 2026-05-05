@@ -1,32 +1,43 @@
+version: "3.9"
+
 services:
-  chatbot:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: internal-chatbot
-    restart: unless-stopped
+  backend:
+    build: .
+    container_name: rag_backend
     ports:
       - "8300:8000"
+    env_file: .env
     environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - COMPANY_NAME=${COMPANY_NAME:-Công ty}
-      - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
-      - TOP_K=${TOP_K:-5}
-      - SQLITE_PATH=${SQLITE_PATH:-/data/sqlite/chatbot.db}
-      - ADMIN_JWT_SECRET=${ADMIN_JWT_SECRET:-change-me}
-      - SMTP_HOST=${SMTP_HOST:-}
-      - SMTP_PORT=${SMTP_PORT:-587}
-      - SMTP_USERNAME=${SMTP_USERNAME:-}
-      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
-      - SMTP_FROM=${SMTP_FROM:-}
-      - SMTP_TLS=${SMTP_TLS:-true}
-      - NOTIFY_EMAILS=${NOTIFY_EMAILS:-}
+      - HF_TOKEN=${HF_TOKEN:-}
+      - HF_HOME=/app/data/hf_cache
     volumes:
-      - ./data/sqlite:/data/sqlite    # SQLite DB (sessions/feedback/admins)
-      - ./data/docs:/data/docs        # Thả PDF vào đây
-      - ./data/chroma:/data/chroma    # Vector DB tự lưu
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      - ./data:/app/data
+      - ./backend:/app                   # dev hot-reload
+    depends_on:
+      qdrant:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 6G                     # ingestion peaks at ~4 GB during HF dataset load
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.9.0          # native x86_64, AVX2-accelerated
+    container_name: rag_qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - ./data/qdrant:/qdrant/storage
+    environment:
+      QDRANT__SERVICE__HTTP_PORT: 6333
+      QDRANT__SERVICE__GRPC_PORT: 6334
+      QDRANT__STORAGE__PERFORMANCE__MAX_SEARCH_THREADS: 0
+      QDRANT__STORAGE__HNSW_INDEX__M: 16
+      QDRANT__STORAGE__HNSW_INDEX__EF_CONSTRUCT: 200
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+    restart: unless-stopped
