@@ -340,7 +340,7 @@ def query(question: str, session_id: str = None, department: str = None) -> dict
 
     resp = client.chat.completions.create(
         model=LLM_MODEL,
-        messages=build_prompt(context=context, question=question, history=history),
+        messages=build_prompt(context=context, question=question, history=history, lang=detected_lang),
         temperature=LLM_TEMPERATURE, 
         max_tokens=1000,
     )

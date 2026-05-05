@@ -502,10 +502,10 @@ def chat(req: ChatRequest, request: Request):
             print(f"[Chat] Warning: could not save user message: {e}")
 
     # 2. Run RAG Pipeline
-    result = answer(
+    result = rag_query(
         question=cleaned_question.strip(),
-        collections=req.collections,
-        filters=req.filters,
+        session_id=req.session_id,
+        department=req.department,
     )
     result["rewritten_query"] = result.get("rewritten_query", cleaned_question.strip())
 
