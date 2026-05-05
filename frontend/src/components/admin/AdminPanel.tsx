@@ -1034,6 +1034,7 @@ function DatasetsTab({
   }, [load]);
 
   const pollJob = useCallback((jobId: string) => {
+    const isFailedState = (state: any) => state?.status === "error" || state?.status?.startsWith("error");
     const interval = setInterval(async () => {
       try {
         const res = await guard(`/api/admin/datasets/status/${jobId}`);
@@ -1045,9 +1046,12 @@ function DatasetsTab({
           return updated;
         });
 
-        if (state.status === "completed" || (state.status && state.status.startsWith("error"))) {
+        if (state.status === "completed" || isFailedState(state)) {
           clearInterval(interval);
-          setStatus({ kind: state.status === "completed" ? "ok" : "err", text: `Job ${jobId}: ${state.status}` });
+          const message = state.status === "completed"
+            ? `Job ${jobId}: completed`
+            : `Job ${jobId}: ${state.error || state.status || "error"}`;
+          setStatus({ kind: state.status === "completed" ? "ok" : "err", text: message });
         }
       } catch (e) {
         console.error("Polling error", e);
@@ -1144,7 +1148,7 @@ function DatasetsTab({
                         if (state.status === "completed") {
                           label = "Completed";
                           colorClass = "bg-[hsl(var(--success))]/15 text-[hsl(var(--success))]";
-                        } else if (state.status?.startsWith("error")) {
+                        } else if (state.status === "error" || state.status?.startsWith("error")) {
                           label = "Error";
                           colorClass = "bg-destructive/10 text-destructive";
                         } else if (state.status === "loading_metadata") {
@@ -1162,9 +1166,16 @@ function DatasetsTab({
                         }
 
                         return (
-                          <span className={cn("inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase whitespace-nowrap", colorClass)}>
-                            {label}
-                          </span>
+                          <div className="space-y-1">
+                            <span className={cn("inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase whitespace-nowrap", colorClass)}>
+                              {label}
+                            </span>
+                            {(state.status === "error" || state.status?.startsWith("error")) && state.error && (
+                              <div className="max-w-[320px] truncate text-[11px] text-destructive" title={state.error}>
+                                {state.error_type ? `${state.error_type}: ` : ""}{state.error}
+                              </div>
+                            )}
+                          </div>
                         );
                       })()}
                     </TD>

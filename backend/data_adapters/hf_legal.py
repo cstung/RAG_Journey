@@ -13,7 +13,7 @@ import re
 import hashlib
 from typing import Iterator
 import datasets
-from datasets import load_dataset, Features, Value
+from datasets import load_dataset
 import pandas as pd
 import pyarrow.parquet as pq
 from huggingface_hub import hf_hub_download
@@ -21,18 +21,24 @@ import os
 from .base import BaseDatasetConnector, DatasetRecord
 from vector_store import COLLECTION_LEGAL
 
+DATASET_ID = "th1nhng0/vietnamese-legal-documents"
+METADATA_CONFIG = "metadata"
+CONTENT_CONFIG = "content"
+SPLIT = "data"
+
+FIELD_ID = "id"
+FIELD_DOC_NUMBER = "so_ky_hieu"
+FIELD_TITLE = "title"
+FIELD_URL = "url"
+FIELD_LEGAL_TYPE = "loai_van_ban"
+FIELD_SECTOR = "linh_vuc"
+FIELD_INDUSTRY = "nganh"
+FIELD_AUTHORITY = "co_quan_ban_hanh"
+FIELD_ISSUANCE_DATE = "ngay_ban_hanh"
+FIELD_EFFECT_STATUS = "tinh_trang_hieu_luc"
 
 # ── Filter presets ─────────────────────────────────────────────────────────────
-DEFAULT_SECTORS = [
-    "Employment - Wages",
-    "Government finance",
-    "Taxes - Fees - Charges",
-    "Business",
-    "Investment",
-    "Accounting",
-    "Insurance",
-    "Trade",
-]
+DEFAULT_SECTORS = None
 DEFAULT_MIN_YEAR = 2000
 
 # ── Chunking constants ──────────────────────────────────────────────────────────
@@ -46,12 +52,12 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
 
     def __init__(
         self,
-        sectors: list[str] | None = None,
+        sectors: list[str] | None = DEFAULT_SECTORS,
         min_year: int = DEFAULT_MIN_YEAR,
         legal_types: list[str] | None = None,   # e.g. ["Nghị định", "Thông tư"]
         max_docs:  int | None = None,            # cap for testing
     ):
-        self.sectors     = sectors or DEFAULT_SECTORS
+        self.sectors     = sectors
         self.min_year    = min_year
         self.legal_types = legal_types
         self.max_docs    = max_docs
@@ -63,31 +69,52 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
 
     # ── Internal helpers ────────────────────────────────────────────────────────
 
+    def _require_columns(self, df: pd.DataFrame, columns: list[str]) -> None:
+        missing = [col for col in columns if col not in df.columns]
+        if missing:
+            raise ValueError(
+                f"Dataset schema mismatch. Missing columns: {missing}. "
+                f"Available columns: {list(df.columns)}"
+            )
+
     def _load_filtered_metadata(self) -> pd.DataFrame:
-        """Load and cache the filtered metadata. Avoids double-download."""
+        """Load and cache filtered metadata using the dataset's official metadata config."""
         if self._filtered_df is not None:
             return self._filtered_df
 
-        print("[hf_legal] Loading legacy metadata (~518k docs)...")
+        print("[hf_legal] Loading metadata from HF dataset config 'metadata'...")
         datasets.utils.logging.set_verbosity_info()
         datasets.utils.logging.enable_progress_bar()
-        # Use direct parquet load to avoid downloading the 4GB content file just for metadata
-        ds   = load_dataset("parquet", data_files="hf://datasets/th1nhng0/vietnamese-legal-documents/legacy/metadata.parquet", split="train")
+
+        ds = load_dataset(DATASET_ID, METADATA_CONFIG, split=SPLIT)
         meta = ds.to_pandas()
 
-        # Sector filter — legal_sectors is a string field in the legacy config
-        sector_pattern = "|".join(re.escape(s) for s in self.sectors)
-        mask = meta["legal_sectors"].fillna("").str.contains(sector_pattern, regex=True)
+        self._require_columns(meta, [FIELD_ID, FIELD_ISSUANCE_DATE, FIELD_LEGAL_TYPE])
 
-        # Year filter — dates are YYYY-MM-DD in legacy config
+        mask = pd.Series(True, index=meta.index)
+        if self.sectors:
+            if FIELD_SECTOR not in meta.columns and FIELD_INDUSTRY not in meta.columns:
+                raise ValueError(
+                    f"Dataset schema mismatch. Missing columns: {[FIELD_SECTOR, FIELD_INDUSTRY]}. "
+                    f"Available columns: {list(meta.columns)}"
+                )
+            sector_source = meta[FIELD_SECTOR].fillna("").astype(str) if FIELD_SECTOR in meta.columns else ""
+            industry_source = meta[FIELD_INDUSTRY].fillna("").astype(str) if FIELD_INDUSTRY in meta.columns else ""
+            sector_pattern = "|".join(re.escape(s) for s in self.sectors)
+            mask &= (
+                (sector_source.str.contains(sector_pattern, regex=True, case=False) if FIELD_SECTOR in meta.columns else False)
+                | (industry_source.str.contains(sector_pattern, regex=True, case=False) if FIELD_INDUSTRY in meta.columns else False)
+            )
+
         meta["_year"] = pd.to_datetime(
-            meta["issuance_date"], errors="coerce"
+            meta[FIELD_ISSUANCE_DATE],
+            errors="coerce",
+            dayfirst=True,
         ).dt.year
         mask &= meta["_year"] >= self.min_year
 
-        # Type filter (optional)
-        if self.legal_types:
-            mask &= meta["legal_type"].isin(self.legal_types)
+        if self.legal_types and FIELD_LEGAL_TYPE in meta.columns:
+            mask &= meta[FIELD_LEGAL_TYPE].isin(self.legal_types)
 
         filtered = meta[mask].copy()
         if self.max_docs:
@@ -97,23 +124,17 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
         self._filtered_df = filtered
         return filtered
 
-    def _load_content_direct(self) -> "pyarrow.Table":
-        """
-        Download content.parquet once via huggingface_hub and read with PyArrow.
-        Bypasses datasets library cast issue with large_string columns.
-        File is cached at HF_HOME so subsequent calls are instant.
-        """
-        print("[hf_legal] Downloading content parquet directly (large_string safe)...")
+    def _load_content_direct(self) -> str:
+        """Download content parquet directly and return local cached path."""
+        print("[hf_legal] Downloading content parquet directly (cached by HF_HOME)...")
         parquet_path = hf_hub_download(
-            repo_id="th1nhng0/vietnamese-legal-documents",
+            repo_id=DATASET_ID,
             filename="data/content.parquet",
             repo_type="dataset",
             cache_dir=os.getenv("HF_HOME", "/app/data/hf_cache"),
         )
-        print(f"[hf_legal] Reading parquet from: {parquet_path}")
-        table = pq.read_table(parquet_path)
-        print(f"[hf_legal] Parquet schema: {table.schema}")
-        return table
+        print(f"[hf_legal] Content parquet path: {parquet_path}")
+        return parquet_path
 
     def _chunk_markdown(self, doc_id: str, markdown: str, metadata: dict) -> list[DatasetRecord]:
         """
@@ -171,20 +192,33 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
 
     def iter_records(self) -> Iterator[DatasetRecord]:
         meta = self._load_filtered_metadata()
-        filtered_id_set = set(meta["id"].tolist())
-        meta_lookup = meta.set_index("id").to_dict("index")
+        filtered_id_set = set(meta[FIELD_ID].tolist())
+        meta_lookup = meta.set_index(FIELD_ID).to_dict("index")
         total_needed = len(filtered_id_set)
         found = 0
 
-        table = self._load_content_direct()
+        parquet_path = self._load_content_direct()
+        pf = pq.ParquetFile(parquet_path)
 
-        # Detect actual column name (content vs content_html)
-        content_col = "content" if "content" in table.schema.names else "content_html"
-        id_col = "id"
+        schema_names = pf.schema.names
+        if "id" in schema_names:
+            id_col = "id"
+        elif "doc_id" in schema_names:
+            id_col = "doc_id"
+        else:
+            raise RuntimeError(f"Unsupported content schema columns: {schema_names}")
+
+        if "content" in schema_names:
+            content_col = "content"
+        elif "content_html" in schema_names:
+            content_col = "content_html"
+        else:
+            raise RuntimeError(f"Unsupported content schema columns: {schema_names}")
+
         print(f"[hf_legal] Using columns: id='{id_col}', content='{content_col}'")
-        print(f"[hf_legal] Streaming {table.num_rows:,} rows for {total_needed} docs...")
+        print(f"[hf_legal] Streaming row groups for {total_needed} docs...")
 
-        for batch in table.to_batches(max_chunksize=1000):
+        for batch in pf.iter_batches(batch_size=1000, columns=[id_col, content_col]):
             batch_ids = batch.column(id_col).to_pylist()
             batch_contents = batch.column(content_col).to_pylist()
 
@@ -198,16 +232,20 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
                 if found % 10 == 0 or found == total_needed:
                     print(f"[hf_legal] Content scan: {found}/{total_needed} docs found")
 
-                meta_row = meta_lookup[norm_id]
+                meta_row = meta_lookup.get(norm_id) or meta_lookup.get(str(norm_id))
+                if not meta_row:
+                    continue
                 metadata = {
-                    "document_number":   meta_row.get("document_number", ""),
-                    "title":             meta_row.get("title", ""),
-                    "url":               meta_row.get("url", ""),
-                    "legal_type":        meta_row.get("legal_type", ""),
-                    "legal_sectors":     meta_row.get("legal_sectors", ""),
-                    "issuing_authority": meta_row.get("issuing_authority", ""),
-                    "issuance_date":     meta_row.get("issuance_date", ""),
-                    "dataset":           "th1nhng0/vietnamese-legal-documents",
+                    "document_number":   meta_row.get(FIELD_DOC_NUMBER, ""),
+                    "title":             meta_row.get(FIELD_TITLE, ""),
+                    "url":               meta_row.get(FIELD_URL, ""),
+                    "legal_type":        meta_row.get(FIELD_LEGAL_TYPE, ""),
+                    "legal_sectors":     meta_row.get(FIELD_SECTOR, ""),
+                    "industry":          meta_row.get(FIELD_INDUSTRY, ""),
+                    "issuing_authority": meta_row.get(FIELD_AUTHORITY, ""),
+                    "issuance_date":     meta_row.get(FIELD_ISSUANCE_DATE, ""),
+                    "effect_status":     meta_row.get(FIELD_EFFECT_STATUS, ""),
+                    "dataset":           DATASET_ID,
                     "type":              "legal",
                 }
 
