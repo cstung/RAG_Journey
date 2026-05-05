@@ -12,6 +12,7 @@ import httpx
 import asyncio
 from fastapi import BackgroundTasks
 import json
+import traceback
 from pathlib import Path
 
 from data_adapters import get_connector, REGISTRY
@@ -194,8 +195,16 @@ async def trigger_ingest(req: IngestRequest, background_tasks: BackgroundTasks):
             runner.run(progress_callback=on_progress)
             _ingest_state[job_id] = {**_ingest_state.get(job_id, {}), "status": "completed"}
         except Exception as e:
-            _ingest_state[job_id] = {"status": f"error: {e}", "embedded": 0, "total": 0}
+            progress = runner.get_progress() if "runner" in locals() else {}
+            _ingest_state[job_id] = {
+                "status": "error",
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "embedded": progress.get("embedded", 0),
+                "total": progress.get("total", 0),
+            }
             print(f"[Ingest] Job {job_id} failed: {e}")
+            traceback.print_exc()
 
     # FastAPI's BackgroundTasks runs sync callables in a threadpool — no executor wrapping needed
     background_tasks.add_task(run_job)

@@ -81,6 +81,41 @@ docker exec internal-chatbot python ingest.py
   - `POST /api/admin/upload`
   - `POST /api/admin/ingest-all`
   - `POST /api/admin/reset`
+  - `POST /api/admin/datasets/ingest`
+  - `GET /api/admin/datasets`
+  - `GET /api/admin/datasets/status/{job_id}`
+
+### Ingest Hugging Face legal dataset (admin flow)
+
+Use the admin dataset ingestion flow (UI or API) for `th1nhng0/vietnamese-legal-documents`:
+
+```bash
+curl -X POST http://localhost:8300/api/admin/datasets/ingest \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"dataset_id":"th1nhng0/vietnamese-legal-documents","max_docs":1,"min_year":2000}'
+```
+
+Check progress:
+
+```bash
+curl -H "Authorization: Bearer <token>" \
+  http://localhost:8300/api/admin/datasets/status/<job_id>
+```
+
+Expected status progression: `queued` → `loading_metadata` → `loading_content` → `running` → `completed`.
+
+If a job fails, status can be `error` with structured fields like `error` and `error_type`.
+
+### Hugging Face connector smoke tests (opt-in)
+
+```bash
+RUN_HF_INTEGRATION_TESTS=1 pytest backend/tests/test_hf_legal_connector.py -q
+```
+
+By default these tests are skipped unless `RUN_HF_INTEGRATION_TESTS=1`.
+
+> Note: `backend/ingest_legal_dataset.py` is deprecated for operational ingestion. Prefer `/api/admin/datasets/ingest`.
 
 ### Ví dụ gọi API:
 

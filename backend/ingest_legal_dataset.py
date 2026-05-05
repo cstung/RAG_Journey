@@ -1,4 +1,6 @@
 """
+Deprecated: use backend/data_adapters/hf_legal.py via /api/admin/datasets/ingest.
+
 Ingest Vietnamese Legal Documents from HuggingFace into ChromaDB.
 
 Dataset: https://huggingface.co/datasets/th1nhng0/vietnamese-legal-documents
@@ -61,7 +63,7 @@ MIN_CHUNK_TOKENS = 20
 OVERLAP_TOKENS = 100
 EMBED_BATCH_SIZE = 40
 
-encoder = tiktoken.get_encoding("cl100k_base")
+encoder = None
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +89,9 @@ def extract_html_text(html: str) -> str:
 
 
 def count_tokens(text: str) -> int:
+    global encoder
+    if encoder is None:
+        encoder = tiktoken.get_encoding("cl100k_base")
     return len(encoder.encode(text))
 
 
@@ -109,6 +114,9 @@ def _make_chunk(text, file_id, page, idx, department, category, domain, filename
 
 
 def _split_by_tokens(text, file_id, page, start_idx, department, category, domain, filename, extra_meta=None):
+    global encoder
+    if encoder is None:
+        encoder = tiktoken.get_encoding("cl100k_base")
     tokens = encoder.encode(text)
     chunks, pos, idx = [], 0, start_idx
     while pos < len(tokens):
@@ -237,27 +245,20 @@ def detect_category(loai_van_ban: str | None) -> str:
 # Content fetching — download parquet and read row-by-row via PyArrow
 # ---------------------------------------------------------------------------
 
-_CONTENT_PARQUET_URL = (
-    "https://huggingface.co/api/datasets/th1nhng0/vietnamese-legal-documents/"
-    "parquet/content/data/0.parquet"
-)
-
-
 def _download_content_parquet(cache_dir: str) -> str:
-    """Download the content parquet file to a local cache directory."""
+    """Download content parquet using Hugging Face dataset cache."""
     os.makedirs(cache_dir, exist_ok=True)
-    dest = os.path.join(cache_dir, "content_data_0.parquet")
-    if os.path.exists(dest):
-        size_mb = os.path.getsize(dest) / (1024 * 1024)
-        print(f"  Content parquet already cached ({size_mb:.0f} MB): {dest}")
-        return dest
+    from huggingface_hub import hf_hub_download
 
-    print(f"  Downloading content parquet (~412 MB)...")
-    import urllib.request
-    urllib.request.urlretrieve(_CONTENT_PARQUET_URL, dest)
-    size_mb = os.path.getsize(dest) / (1024 * 1024)
-    print(f"  Downloaded: {size_mb:.0f} MB")
-    return dest
+    parquet_path = hf_hub_download(
+        repo_id=DATASET_NAME,
+        filename="data/content.parquet",
+        repo_type="dataset",
+        cache_dir=cache_dir,
+    )
+    size_mb = os.path.getsize(parquet_path) / (1024 * 1024)
+    print(f"  Content parquet ready ({size_mb:.0f} MB): {parquet_path}")
+    return parquet_path
 
 
 def build_content_lookup(parquet_path: str, target_ids: set[int]) -> dict[int, str]:
@@ -564,6 +565,7 @@ def ingest_legal_dataset(
 
 
 def main():
+    print("[DEPRECATED] Prefer /api/admin/datasets/ingest (VNLegalDocumentConnector + IngestRunner).")
     parser = argparse.ArgumentParser(
         description="Ingest Vietnamese Legal Documents from HuggingFace into ChromaDB",
         formatter_class=argparse.RawDescriptionHelpFormatter,
