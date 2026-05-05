@@ -591,6 +591,10 @@ function DocumentsTab({
   const [editDept, setEditDept] = useState("");
   const [editCat, setEditCat] = useState("");
   const [saving, setSaving] = useState(false);
+  const [ingestedItems, setIngestedItems] = useState<any[]>([]);
+  const [ingestedStatus, setIngestedStatus] = useState("");
+  const [ingestedDataset, setIngestedDataset] = useState("");
+  const [ingestedLoading, setIngestedLoading] = useState(false);
 
   const load = useCallback(
     async (p = 1) => {
@@ -614,6 +618,24 @@ function DocumentsTab({
   useEffect(() => {
     load(1);
   }, [load]);
+
+  const loadIngested = useCallback(async () => {
+    setIngestedLoading(true);
+    const qs = new URLSearchParams({ limit: "100" });
+    if (ingestedStatus.trim()) qs.set("status", ingestedStatus.trim());
+    if (ingestedDataset.trim()) qs.set("dataset_id", ingestedDataset.trim());
+    try {
+      const res = await guard(`/api/admin/documents/ingested?${qs}`);
+      const data = await res.json();
+      setIngestedItems(Array.isArray(data) ? data : []);
+    } finally {
+      setIngestedLoading(false);
+    }
+  }, [guard, ingestedStatus, ingestedDataset]);
+
+  useEffect(() => {
+    loadIngested();
+  }, [loadIngested]);
 
   async function crawlUrl() {
     if (!crawl.trim()) return;
@@ -756,6 +778,69 @@ function DocumentsTab({
         onPrev={() => load(page - 1)}
         onNext={() => load(page + 1)}
       />
+
+      <div className="mt-6 border-t border-border pt-4">
+        <h4 className="mb-3 text-sm font-bold text-ocean-deep">Dataset Ingested Documents</h4>
+        <div className="mb-3 flex flex-wrap gap-2">
+          <Input
+            value={ingestedDataset}
+            onChange={(e) => setIngestedDataset(e.target.value)}
+            placeholder="Dataset ID (optional)…"
+            className="h-9 w-full sm:w-64"
+          />
+          <select
+            value={ingestedStatus}
+            onChange={(e) => setIngestedStatus(e.target.value)}
+            className="h-9 rounded-lg border border-border bg-card px-3 text-xs font-semibold focus-ring"
+          >
+            <option value="">All status</option>
+            <option value="pending">pending</option>
+            <option value="parsed">parsed</option>
+            <option value="chunked">chunked</option>
+            <option value="embedded">embedded</option>
+            <option value="failed">failed</option>
+            <option value="skipped">skipped</option>
+            <option value="missing_content">missing_content</option>
+          </select>
+          <Button size="sm" variant="outline" onClick={loadIngested}>
+            Search Dataset Docs
+          </Button>
+        </div>
+        {ingestedLoading ? (
+          <Loading />
+        ) : !ingestedItems.length ? (
+          <Empty label="No ingested dataset documents" />
+        ) : (
+          <TableShell>
+            <thead>
+              <tr>
+                <TH>Doc ID</TH>
+                <TH>Số ký hiệu</TH>
+                <TH>Loại văn bản</TH>
+                <TH>Lĩnh vực</TH>
+                <TH>Chunks</TH>
+                <TH>Embedded</TH>
+                <TH>Status</TH>
+                <TH>Error</TH>
+              </tr>
+            </thead>
+            <tbody>
+              {ingestedItems.map((d) => (
+                <tr key={d.id}>
+                  <TD>{d.id}</TD>
+                  <TD>{d.so_ky_hieu || "—"}</TD>
+                  <TD>{d.loai_van_ban || "—"}</TD>
+                  <TD>{d.linh_vuc || "—"}</TD>
+                  <TD>{d.chunk_count ?? 0}</TD>
+                  <TD>{d.embedded_count ?? 0}</TD>
+                  <TD>{d.status || "—"}</TD>
+                  <TD className="max-w-[280px] break-words text-destructive">{d.error || "—"}</TD>
+                </tr>
+              ))}
+            </tbody>
+          </TableShell>
+        )}
+      </div>
 
       <DetailModal title="Document detail" data={detail} onClose={() => setDetail(null)}>
         {detail && (

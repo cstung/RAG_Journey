@@ -42,6 +42,9 @@ from database import (
     get_session_detail,
     init_db,
     list_documents,
+    list_ingested_documents,
+    get_ingested_document,
+    ingested_document_stats,
     list_negative_feedback,
     list_sessions,
     get_document,
@@ -345,6 +348,28 @@ def admin_list_documents(
     )
 
 
+@app.get("/api/admin/documents/ingested")
+def admin_list_ingested_documents(
+    status: str | None = Query(default=None),
+    dataset_id: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=500),
+):
+    return list_ingested_documents(status=status, dataset_id=dataset_id, limit=limit)
+
+
+@app.get("/api/admin/documents/ingested/stats")
+def admin_ingested_documents_stats(dataset_id: str | None = Query(default=None)):
+    return ingested_document_stats(dataset_id=dataset_id)
+
+
+@app.get("/api/admin/documents/ingested/{doc_id}")
+def admin_get_ingested_document(doc_id: str):
+    row = get_ingested_document(doc_id)
+    if not row:
+        raise HTTPException(404, "Document not found")
+    return row
+
+
 @app.get("/api/admin/documents/{document_id}")
 def admin_get_document(document_id: int):
     doc = get_document(document_id)
@@ -477,10 +502,10 @@ def chat(req: ChatRequest, request: Request):
             print(f"[Chat] Warning: could not save user message: {e}")
 
     # 2. Run RAG Pipeline
-    result = answer(
+    result = rag_query(
         question=cleaned_question.strip(),
-        collections=req.collections,
-        filters=req.filters,
+        session_id=req.session_id,
+        department=req.department,
     )
     result["rewritten_query"] = result.get("rewritten_query", cleaned_question.strip())
 

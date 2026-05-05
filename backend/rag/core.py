@@ -54,25 +54,39 @@ class BM25Index:
         return text.lower().split()
 
     def build(self):
-        client = get_client()
+        qdrant_client = get_client()
         self.ids = []
         self.texts = []
         self.metas = []
         for coll in [COLLECTION_PDF, COLLECTION_LEGAL]:
             try:
-                records, _ = client.scroll(collection_name=coll, limit=100000, with_payload=True, with_vectors=False)
+                records, _ = qdrant_client.scroll(collection_name=coll, limit=100000, with_payload=True, with_vectors=False)
                 for r in records:
+                    raw_text = (r.payload.get("text", "") or "").strip()
+                    if not raw_text:
+                        continue
                     self.ids.append(str(r.id))
-                    self.texts.append(r.payload.get("text", ""))
-                    self.metas.append({k:v for k,v in r.payload.items() if k != "text"})
+                    self.texts.append(raw_text)
+                    self.metas.append({k: v for k, v in r.payload.items() if k != "text"})
             except Exception:
                 pass
-        
+
         if not self.ids:
             self.bm25 = None
+            print("[BM25] Rebuilt: 0 chunks (no non-empty text found)")
             return
-            
-        self.bm25 = BM25Okapi([self._tok(text) for text in self.texts])
+
+        tokenized_corpus = [self._tok(text) for text in self.texts if text.strip()]
+        tokenized_corpus = [tokens for tokens in tokenized_corpus if tokens]
+        if not tokenized_corpus:
+            self.bm25 = None
+            self.ids = []
+            self.texts = []
+            self.metas = []
+            print("[BM25] Rebuilt: 0 chunks (empty tokenized corpus)")
+            return
+
+        self.bm25 = BM25Okapi(tokenized_corpus)
         print(f"[BM25] Rebuilt: {len(self.ids)} chunks")
 
     def search(self, query: str, n: int, department: str = None) -> list[tuple]:
@@ -326,7 +340,7 @@ def query(question: str, session_id: str = None, department: str = None) -> dict
 
     resp = client.chat.completions.create(
         model=LLM_MODEL,
-        messages=build_prompt(context=context, question=question, history=history),
+        messages=build_prompt(context=context, question=question, history=history, lang=detected_lang),
         temperature=LLM_TEMPERATURE, 
         max_tokens=1000,
     )
