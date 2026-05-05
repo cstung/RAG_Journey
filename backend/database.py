@@ -737,8 +737,6 @@ def ingested_document_stats(dataset_id: str | None = None) -> dict:
             "chunked": counts.get("chunked", 0),
             "embedded": counts.get("embedded", 0),
             "failed": counts.get("failed", 0),
-            "skipped": counts.get("skipped", 0),
-            "missing_content": counts.get("missing_content", 0),
         }
     finally:
         conn.close()

@@ -57,7 +57,6 @@ OVERLAP_TOKENS     = 80     # overlap between sliding-window chunks
 CHARS_PER_TOKEN    = 3.5    # rough estimate for Vietnamese
 MIN_CHUNK_LENGTH = 100
 MAX_CHUNK_LENGTH = 2000
-SKIPPED_STATUSES = {"skipped", "missing_content"}
 
 
 class VNLegalDocumentConnector(BaseDatasetConnector):
@@ -283,7 +282,7 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
                 update_ingested_document(str(norm_id), {
                     "content_length": len(content or ""),
                     "parsed_length": len(parsed_text or ""),
-                    "status": "parsed" if parsed_text.strip() else "skipped",
+                    "status": "parsed" if parsed_text.strip() else "failed",
                     "error": None if parsed_text.strip() else "empty parsed text",
                 })
                 
@@ -301,12 +300,8 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
                     print(f"[hf_legal] Total chunks: {num_chunks}")
                 update_ingested_document(str(norm_id), {
                     "chunk_count": num_chunks,
-                    "status": "chunked" if num_chunks > 0 else "skipped",
-                    "error": None if num_chunks > 0 else (
-                        "parsed text below min chunk length"
-                        if len((parsed_text or "").strip()) < MIN_CHUNK_LENGTH
-                        else "no chunks created"
-                    ),
+                    "status": "chunked" if num_chunks > 0 else "failed",
+                    "error": None if num_chunks > 0 else "no chunks created",
                 })
                 
                 yield from chunks

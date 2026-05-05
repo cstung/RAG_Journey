@@ -799,8 +799,6 @@ function DocumentsTab({
             <option value="chunked">chunked</option>
             <option value="embedded">embedded</option>
             <option value="failed">failed</option>
-            <option value="skipped">skipped</option>
-            <option value="missing_content">missing_content</option>
           </select>
           <Button size="sm" variant="outline" onClick={loadIngested}>
             Search Dataset Docs
