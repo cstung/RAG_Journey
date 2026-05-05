@@ -12,6 +12,7 @@ Uses the 'legacy' config which has English field names and plain-text content:
 import re
 import hashlib
 from typing import Iterator
+from datetime import datetime
 import datasets
 from datasets import load_dataset
 import pandas as pd
@@ -20,6 +21,7 @@ from huggingface_hub import hf_hub_download
 import os
 from .base import BaseDatasetConnector, DatasetRecord
 from vector_store import COLLECTION_LEGAL
+from database import upsert_ingested_document, update_ingested_document
 
 DATASET_ID = "th1nhng0/vietnamese-legal-documents"
 METADATA_CONFIG = "metadata"
@@ -36,6 +38,13 @@ FIELD_INDUSTRY = "nganh"
 FIELD_AUTHORITY = "co_quan_ban_hanh"
 FIELD_ISSUANCE_DATE = "ngay_ban_hanh"
 FIELD_EFFECT_STATUS = "tinh_trang_hieu_luc"
+FIELD_MAP = {
+    "document_number": FIELD_DOC_NUMBER,
+    "issuance_date": FIELD_ISSUANCE_DATE,
+    "legal_type": FIELD_LEGAL_TYPE,
+    "legal_sectors": [FIELD_SECTOR, FIELD_INDUSTRY],
+    "issuing_authority": FIELD_AUTHORITY,
+}
 
 # ── Filter presets ─────────────────────────────────────────────────────────────
 DEFAULT_SECTORS = None
@@ -46,6 +55,8 @@ MAX_CHUNK_TOKENS   = 700    # ~700 tokens ≈ safe context window for retrieval
 MIN_CHUNK_TOKENS   = 80     # merge chunks shorter than this
 OVERLAP_TOKENS     = 80     # overlap between sliding-window chunks
 CHARS_PER_TOKEN    = 3.5    # rough estimate for Vietnamese
+MIN_CHUNK_LENGTH = 100
+MAX_CHUNK_LENGTH = 2000
 
 
 class VNLegalDocumentConnector(BaseDatasetConnector):
@@ -107,9 +118,9 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
             )
 
         meta["_year"] = pd.to_datetime(
-            meta[FIELD_ISSUANCE_DATE],
+            meta[FIELD_ISSUANCE_DATE].astype(str),
+            format="%d/%m/%Y",
             errors="coerce",
-            dayfirst=True,
         ).dt.year
         mask &= meta["_year"] >= self.min_year
 
@@ -121,6 +132,17 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
             filtered = filtered.head(self.max_docs)
 
         print(f"[hf_legal] Filtered: {len(filtered):,} documents")
+        for _, row in filtered.iterrows():
+            upsert_ingested_document({
+                "id": str(row.get(FIELD_ID)),
+                "dataset_id": DATASET_ID,
+                "so_ky_hieu": row.get(FIELD_DOC_NUMBER),
+                "loai_van_ban": row.get(FIELD_LEGAL_TYPE),
+                "linh_vuc": row.get(FIELD_SECTOR) or row.get(FIELD_INDUSTRY),
+                "co_quan_ban_hanh": row.get(FIELD_AUTHORITY),
+                "ngay_ban_hanh": row.get(FIELD_ISSUANCE_DATE),
+                "status": "pending",
+            })
         self._filtered_df = filtered
         return filtered
 
@@ -141,7 +163,10 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
         Simple sliding-window chunker for plain-text Vietnamese legal documents.
         Tries to split on paragraph breaks first, then falls back to fixed window.
         """
-        max_chars = int(MAX_CHUNK_TOKENS * CHARS_PER_TOKEN)
+        text = (markdown or "").strip()
+        if len(text) < MIN_CHUNK_LENGTH:
+            return []
+        max_chars = min(int(MAX_CHUNK_TOKENS * CHARS_PER_TOKEN), MAX_CHUNK_LENGTH)
         min_chars = int(MIN_CHUNK_TOKENS * CHARS_PER_TOKEN)
         ovl_chars = int(OVERLAP_TOKENS   * CHARS_PER_TOKEN)
 
@@ -250,9 +275,16 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
                 }
 
                 print(f"[hf_legal] Processing doc {norm_id} | content_html len: {len(content or '')}")
-                
                 from ingest import extract_html_text
                 parsed_text = extract_html_text(content or "")
+                if not parsed_text.strip():
+                    print(f"[hf_legal] Empty parsed text | raw length={len(content or '')}")
+                update_ingested_document(str(norm_id), {
+                    "content_length": len(content or ""),
+                    "parsed_length": len(parsed_text or ""),
+                    "status": "parsed" if parsed_text.strip() else "failed",
+                    "error": None if parsed_text.strip() else "empty parsed text",
+                })
                 
                 print(f"[hf_legal] Parsed text len: {len(parsed_text)} | Sample: {parsed_text[:100]}...")
 
@@ -264,6 +296,13 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
                 
                 num_chunks = len(chunks)
                 print(f"[hf_legal] Created {num_chunks} chunks for doc {norm_id}")
+                if num_chunks:
+                    print(f"[hf_legal] Total chunks: {num_chunks}")
+                update_ingested_document(str(norm_id), {
+                    "chunk_count": num_chunks,
+                    "status": "chunked" if num_chunks > 0 else "failed",
+                    "error": None if num_chunks > 0 else "no chunks created",
+                })
                 
                 yield from chunks
 

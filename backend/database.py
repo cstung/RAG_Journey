@@ -75,6 +75,27 @@ CREATE TABLE IF NOT EXISTS email_logs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_email_logs_created_at ON email_logs(created_at);
+
+CREATE TABLE IF NOT EXISTS ingested_documents (
+  id TEXT PRIMARY KEY,
+  dataset_id TEXT,
+  so_ky_hieu TEXT,
+  loai_van_ban TEXT,
+  linh_vuc TEXT,
+  co_quan_ban_hanh TEXT,
+  ngay_ban_hanh TEXT,
+  content_length INTEGER DEFAULT 0,
+  parsed_length INTEGER DEFAULT 0,
+  chunk_count INTEGER DEFAULT 0,
+  embedded_count INTEGER DEFAULT 0,
+  status TEXT,
+  error TEXT,
+  created_at DATETIME DEFAULT (datetime('now')),
+  updated_at DATETIME DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_ingested_documents_status ON ingested_documents(status);
+CREATE INDEX IF NOT EXISTS idx_ingested_documents_dataset_id ON ingested_documents(dataset_id);
 """
 
 
@@ -621,6 +642,102 @@ def get_document(document_id: int) -> dict | None:
             (int(document_id),),
         ).fetchone()
         return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def upsert_ingested_document(row: dict) -> None:
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO ingested_documents (id, dataset_id, so_ky_hieu, loai_van_ban, linh_vuc, co_quan_ban_hanh, ngay_ban_hanh, status, error) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET "
+            "dataset_id=excluded.dataset_id, so_ky_hieu=excluded.so_ky_hieu, loai_van_ban=excluded.loai_van_ban, "
+            "linh_vuc=excluded.linh_vuc, co_quan_ban_hanh=excluded.co_quan_ban_hanh, ngay_ban_hanh=excluded.ngay_ban_hanh, "
+            "status=excluded.status, error=excluded.error, updated_at=datetime('now')",
+            (
+                str(row.get("id", "")),
+                row.get("dataset_id"),
+                row.get("so_ky_hieu"),
+                row.get("loai_van_ban"),
+                row.get("linh_vuc"),
+                row.get("co_quan_ban_hanh"),
+                row.get("ngay_ban_hanh"),
+                row.get("status", "pending"),
+                row.get("error"),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_ingested_document(doc_id: str, fields: dict) -> None:
+    if not fields:
+        return
+    set_parts = [f"{k} = ?" for k in fields.keys()]
+    args = [fields[k] for k in fields.keys()]
+    args.extend([doc_id])
+    conn = get_db()
+    try:
+        conn.execute(
+            f"UPDATE ingested_documents SET {', '.join(set_parts)}, updated_at=datetime('now') WHERE id = ?",
+            args,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_ingested_documents(status: str | None = None, dataset_id: str | None = None, limit: int = 50) -> list[dict]:
+    where, args = [], []
+    if status:
+        where.append("status = ?")
+        args.append(status)
+    if dataset_id:
+        where.append("dataset_id = ?")
+        args.append(dataset_id)
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            f"SELECT * FROM ingested_documents {where_sql} ORDER BY updated_at DESC LIMIT ?",
+            [*args, max(1, min(500, int(limit)))],
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_ingested_document(doc_id: str) -> dict | None:
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT * FROM ingested_documents WHERE id = ?", (doc_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def ingested_document_stats(dataset_id: str | None = None) -> dict:
+    where_sql = "WHERE dataset_id = ?" if dataset_id else ""
+    args = [dataset_id] if dataset_id else []
+    conn = get_db()
+    try:
+        total = conn.execute(f"SELECT COUNT(1) AS c FROM ingested_documents {where_sql}", args).fetchone()["c"]
+        rows = conn.execute(
+            f"SELECT status, COUNT(1) AS c FROM ingested_documents {where_sql} GROUP BY status",
+            args,
+        ).fetchall()
+        counts = {r["status"]: int(r["c"]) for r in rows}
+        return {
+            "total": int(total or 0),
+            "pending": counts.get("pending", 0),
+            "parsed": counts.get("parsed", 0),
+            "chunked": counts.get("chunked", 0),
+            "embedded": counts.get("embedded", 0),
+            "failed": counts.get("failed", 0),
+        }
     finally:
         conn.close()
 
