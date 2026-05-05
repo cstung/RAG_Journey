@@ -310,3 +310,11 @@ class VNLegalDocumentConnector(BaseDatasetConnector):
                 if not filtered_id_set:
                     print(f"[hf_legal] All {total_needed} docs found. Done.")
                     return
+
+        if filtered_id_set:
+            print(f"[hf_legal] Missing content for {len(filtered_id_set)} metadata rows")
+            for missing_id in filtered_id_set:
+                update_ingested_document(str(missing_id), {
+                    "status": "missing_content",
+                    "error": "content not found in content split",
+                })
